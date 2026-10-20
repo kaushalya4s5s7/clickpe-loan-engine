@@ -1,0 +1,423 @@
+{
+  "id": "loanEngineNotifC",
+  "name": "C · Notify matched users",
+  "active": false,
+  "nodes": [
+    {
+      "id": "9fb0d51c-ea89-5f82-8682-8ed875924c0c",
+      "name": "Called by workflow B",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        100
+      ],
+      "parameters": {
+        "inputSource": "passthrough"
+      }
+    },
+    {
+      "id": "45446c1b-ab66-56cf-bb9b-8f474418912b",
+      "name": "Claim batch",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        220,
+        100
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Only one notifier per batch: CAS MATCHED → NOTIFYING. Zero rows = already handled → stop.\n-- $1 = batch_id\nWITH claimed AS (\n  UPDATE ingest_batches SET status = 'NOTIFYING', updated_at = now()\n  WHERE id = $1::uuid AND status = 'MATCHED'\n  RETURNING id\n), ev AS (\n  INSERT INTO pipeline_events (batch_id, stage, status) SELECT id, 'notify', 'started' FROM claimed\n)\nSELECT id::text AS batch_id FROM claimed;",
+        "options": {
+          "queryReplacement": "={{ [$json.batch_id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "loanEngineDbCred",
+          "name": "Loan DB"
+        }
+      }
+    },
+    {
+      "id": "fd929570-ab56-5928-b178-ccb885e6f401",
+      "name": "Queue notifications",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        440,
+        100
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Pick users with NEW (un-notified) matches and create one PENDING notification each.\n-- Filters: marketing consent, suppression list, 7-day frequency cap, deliverable address.\n-- TEST MODE (the brief: never email sample-CSV addresses): the recipient is rewritten to one of\n-- our own Gmail +aliases, one alias per user, capped at $4 users. UNIQUE(user_id, digest_key)\n-- makes a re-run a no-op: the same offer set can't be queued twice, and the partial unique index\n-- (user_id, cap_week) means two notifiers racing for the same person can't both queue an email.\n-- $1 batch_id, $2 test_mode ('true'/'false'), $3 test recipients JSON array, $4 max emails per run\nWITH settings AS (\n  SELECT $2::boolean AS test_mode, $3::jsonb AS aliases, $4::int AS cap\n), candidates AS (\n  SELECT m.user_id, u.email, u.email_deliverable,\n         array_agg(m.product_id ORDER BY m.score DESC, m.product_id) AS products\n  FROM matches m\n  JOIN users u USING (user_id)\n  WHERE m.batch_id = $1::uuid AND m.notified_at IS NULL AND u.consent_marketing\n    AND NOT EXISTS (SELECT 1 FROM notifications n\n                    WHERE n.user_id = m.user_id AND n.status = 'SENT' AND n.sent_at > now() - interval '7 days')\n  GROUP BY m.user_id, u.email, u.email_deliverable\n), addressed AS (\n  SELECT c.*, row_number() OVER (ORDER BY c.user_id) AS rn,\n         CASE WHEN s.test_mode\n              THEN s.aliases ->> ((row_number() OVER (ORDER BY c.user_id) - 1)::int)\n              ELSE c.email END AS recipient\n  FROM candidates c CROSS JOIN settings s\n  WHERE s.test_mode OR c.email_deliverable\n), eligible AS (\n  SELECT a.* FROM addressed a CROSS JOIN settings s\n  WHERE a.recipient IS NOT NULL\n    AND (NOT s.test_mode OR a.rn <= s.cap)\n    AND NOT EXISTS (SELECT 1 FROM suppression x\n                    WHERE x.email_hash = encode(sha256(convert_to(lower(a.recipient), 'UTF8')), 'hex'))\n), inserted AS (\n  INSERT INTO notifications (user_id, batch_id, digest_key, recipient)\n  SELECT user_id, $1::uuid, md5(array_to_string(products, ',')), recipient FROM eligible\n  ON CONFLICT DO NOTHING          -- either unique rule (same offer, or already emailed this week)\n  RETURNING id\n)\nSELECT (SELECT count(*) FROM candidates) AS users_with_new_matches,\n       (SELECT count(*) FROM inserted)   AS queued;",
+        "options": {
+          "queryReplacement": "={{ [$('Claim batch').first().json.batch_id, String($env.TEST_MODE ?? 'true'), JSON.stringify(String($env.TEST_RECIPIENTS ?? '').split(',').map((s) => s.trim()).filter(Boolean)), String($env.MAX_EMAILS_PER_RUN ?? '5')] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "loanEngineDbCred",
+          "name": "Loan DB"
+        }
+      }
+    },
+    {
+      "id": "6001e90f-63f3-536b-81da-e9ecba48875f",
+      "name": "Load pending",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        660,
+        100
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Everything the renderer needs, one item per PENDING notification (bounded: LIMIT 500 per page).\n-- $1 batch_id\nSELECT n.id AS notification_id, n.user_id, n.recipient, u.name, u.monthly_income, u.credit_score,\n       u.employment_status::text AS employment_status, u.age,\n       (SELECT json_agg(x ORDER BY x.score DESC)\n          FROM (SELECT m.score, m.status, m.unverified, p.product_name, p.lender_name, p.source_url,\n                       p.interest_rate_min, p.interest_rate_max, p.min_monthly_income, p.min_credit_score,\n                       p.min_age, p.max_age, p.employment_types::text[] AS employment_types, p.max_loan_amount\n                  FROM matches m JOIN loan_products p ON p.id = m.product_id\n                 WHERE m.user_id = n.user_id AND m.notified_at IS NULL) x) AS products\nFROM notifications n\nJOIN users u USING (user_id)\nWHERE n.batch_id = $1::uuid AND n.status = 'PENDING'\nORDER BY n.id\nLIMIT 500;",
+        "options": {
+          "queryReplacement": "={{ [$('Claim batch').first().json.batch_id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "loanEngineDbCred",
+          "name": "Loan DB"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "id": "3138a229-ad87-50e3-8352-4bfd1db21949",
+      "name": "Render emails",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        100
+      ],
+      "parameters": {
+        "jsCode": "// ---- email.js (source: apps/workflows/src/code/email.js — edit there, then rebuild) ----\nconst email = (() => { const module = { exports: {} };\n// Workflow C helpers: personalised, honest, mobile-first email + the unsubscribe token.\n//\n// Content rules (docs/DESIGN.md §9.9): lender named on every card, rate exactly as published,\n// \"why you qualify\" from the user's own data, unverifiable conditions shown openly, no PII in\n// links, HTML escaped (names come from a spreadsheet), plain-text twin, well under Gmail's\n// ~102 KB clipping limit.\n\nconst crypto = require(\"crypto\");\n\nconst b64url = (buf) => Buffer.from(buf).toString(\"base64\").replace(/\\+/g, \"-\").replace(/\\//g, \"_\").replace(/=+$/, \"\");\n\n/** Identical to packages/notifications (Go); a contract test checks both. */\nfunction unsubscribeToken(userId, secret, nowSeconds, ttlSeconds = 90 * 24 * 3600) {\n  const payload = `${b64url(Buffer.from(String(userId), \"utf8\"))}.${nowSeconds + ttlSeconds}`;\n  const sig = crypto.createHmac(\"sha256\", secret).update(payload).digest().subarray(0, 16);\n  return `${payload}.${b64url(sig)}`;\n}\n\nconst escapeHtml = (s) => String(s ?? \"\").replace(/[&<>\"']/g, (c) => ({ \"&\": \"&amp;\", \"<\": \"&lt;\", \">\": \"&gt;\", '\"': \"&quot;\", \"'\": \"&#39;\" })[c]);\n\n/** Indian digit grouping without relying on ICU: 150000 → \"1,50,000\". */\nfunction formatINR(value) {\n  const n = Math.round(Number(value));\n  if (!Number.isFinite(n)) return \"\";\n  const s = String(Math.abs(n));\n  const last3 = s.slice(-3);\n  const rest = s.slice(0, -3).replace(/\\B(?=(\\d{2})+(?!\\d))/g, \",\");\n  return (n < 0 ? \"-\" : \"\") + \"₹\" + (rest ? `${rest},${last3}` : last3);\n}\n\nfunction rateText(p) {\n  const lo = p.interest_rate_min, hi = p.interest_rate_max;\n  if (lo == null) return \"Rate: see lender website\";\n  return lo === hi || hi == null ? `Interest from ${Number(lo)}% p.a.` : `Interest ${Number(lo)}–${Number(hi)}% p.a.`;\n}\n\n/** The user's own data, held against each published rule — the \"why\" behind the match. */\nfunction reasons(user, p) {\n  const r = [];\n  if (p.min_monthly_income != null) r.push(`income ${formatINR(user.monthly_income)}/month ≥ ${formatINR(p.min_monthly_income)} minimum`);\n  if (p.min_credit_score != null && user.credit_score != null) r.push(`credit score ${user.credit_score} ≥ ${p.min_credit_score}`);\n  if (p.min_age != null || p.max_age != null) r.push(`age ${user.age} within ${p.min_age ?? \"–\"}–${p.max_age ?? \"–\"}`);\n  if (Array.isArray(p.employment_types) && p.employment_types.length) r.push(`${user.employment_status} applicants accepted`);\n  return r;\n}\n\nconst firstName = (name) => String(name ?? \"\").trim().split(/\\s+/)[0] || \"there\";\n\n/**\n * @param n  {user_id, name, monthly_income, credit_score, employment_status, age, products:[...]}\n * @param o  {unsubscribeBase, secret, now (seconds), maxCards}\n */\nfunction renderEmail(n, o) {\n  const products = (n.products || []).slice(0, o.maxCards ?? 3);\n  const more = (n.products || []).length - products.length;\n  const name = firstName(n.name);\n  const token = unsubscribeToken(n.user_id, o.secret, o.now);\n  const unsubscribeUrl = `${o.unsubscribeBase}?t=${encodeURIComponent(token)}`;\n  const count = (n.products || []).length;\n  const subject = `${name}, ${count} personal loan${count === 1 ? \"\" : \"s\"} you may qualify for`;\n\n  const cards = products.map((p) => {\n    const why = reasons(n, p).map((r) => `<li>${escapeHtml(r)}</li>`).join(\"\");\n    const todo = (p.unverified || []).map((u) => `<li>${escapeHtml(u)}</li>`).join(\"\");\n    return `<tr><td style=\"padding:16px;border:1px solid #e4e4e7;border-radius:12px;background:#ffffff\">\n<div style=\"font-size:12px;color:#71717a;text-transform:uppercase;letter-spacing:.04em\">${escapeHtml(p.lender_name)}</div>\n<div style=\"font-size:18px;font-weight:700;color:#18181b;margin:2px 0 6px\">${escapeHtml(p.product_name)}</div>\n<div style=\"font-size:15px;color:#18181b\">${escapeHtml(rateText(p))}${p.max_loan_amount ? ` · up to ${formatINR(p.max_loan_amount)}` : \"\"}</div>\n${why ? `<div style=\"margin-top:10px;font-size:14px;color:#15803d;font-weight:600\">Why you may qualify</div><ul style=\"margin:4px 0 0;padding-left:18px;font-size:14px;color:#3f3f46\">${why}</ul>` : \"\"}\n${todo ? `<div style=\"margin-top:10px;font-size:14px;color:#a16207;font-weight:600\">Still to confirm with the lender</div><ul style=\"margin:4px 0 0;padding-left:18px;font-size:14px;color:#3f3f46\">${todo}</ul>` : \"\"}\n<div style=\"margin-top:14px\"><a href=\"${escapeHtml(p.source_url)}\" style=\"display:inline-block;background:#4338ca;color:#ffffff;text-decoration:none;padding:10px 16px;border-radius:8px;font-size:14px;font-weight:600\">View on ${escapeHtml(p.lender_name)}</a></div>\n</td></tr><tr><td style=\"height:12px\"></td></tr>`;\n  }).join(\"\");\n\n  const html = `<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><meta name=\"color-scheme\" content=\"light\"><title>${escapeHtml(subject)}</title></head>\n<body style=\"margin:0;background:#f4f4f5;font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif\">\n<div style=\"display:none;max-height:0;overflow:hidden\">Based on your profile — checking these doesn't affect your credit score.</div>\n<table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\"><tr><td align=\"center\" style=\"padding:24px 12px\">\n<table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"max-width:560px\">\n<tr><td style=\"padding:0 4px 16px;font-size:16px;color:#18181b\">Hi ${escapeHtml(name)},<br><br>Based on the details shared with us, you may be eligible for these personal loans:</td></tr>\n${cards}\n${more > 0 ? `<tr><td style=\"padding:0 4px 12px;font-size:14px;color:#3f3f46\">+ ${more} more option${more === 1 ? \"\" : \"s\"} matched your profile.</td></tr>` : \"\"}\n<tr><td style=\"padding:8px 4px;font-size:12px;line-height:1.5;color:#71717a\">These are indicative matches based on publicly listed criteria — not loan offers or approvals. Final eligibility, rates and amounts are decided by the lender.<br><br>\nYou're receiving this because you shared your details for loan offers. <a href=\"${escapeHtml(unsubscribeUrl)}\" style=\"color:#71717a\">Unsubscribe</a></td></tr>\n</table></td></tr></table></body></html>`;\n\n  const text = [\n    `Hi ${name},`, \"\", \"Based on the details shared with us, you may be eligible for these personal loans:\", \"\",\n    ...products.flatMap((p) => [\n      `• ${p.product_name} — ${p.lender_name}`, `  ${rateText(p)}`,\n      ...reasons(n, p).map((r) => `  ✓ ${r}`), ...(p.unverified || []).map((u) => `  ? To confirm: ${u}`),\n      `  ${p.source_url}`, \"\",\n    ]),\n    more > 0 ? `+ ${more} more option(s) matched your profile.\\n` : \"\",\n    \"Indicative matches only — not loan offers. The lender decides final eligibility.\",\n    `Unsubscribe: ${unsubscribeUrl}`,\n  ].join(\"\\n\");\n\n  return { subject, html, text };\n}\n\nif (typeof module !== \"undefined\") {\n  module.exports = { renderEmail, unsubscribeToken, formatINR, escapeHtml, reasons };\n}\n\nreturn module.exports; })();\n\n// One personalised email per pending notification (HTML-escaped, Indian number format, the\n// user's own numbers held against each lender's rules, unverifiable conditions shown honestly).\nconst now = Math.floor(Date.now() / 1000);\nconst opts = { unsubscribeBase: $env.UNSUBSCRIBE_BASE_URL, secret: $env.UNSUBSCRIBE_SECRET, now, maxCards: 3 };\nconst out = [];\nfor (const item of $input.all()) {\n  const n = item.json;\n  if (!n.notification_id || !Array.isArray(n.products) || !n.products.length) continue;\n  const { subject, html, text } = email.renderEmail(n, opts);\n  out.push({ json: { notification_id: n.notification_id, recipient: n.recipient, subject, html, text, send: true } });\n}\n// Always emit something so the workflow can close the batch even when nobody needs an email.\nreturn out.length ? out : [{ json: { send: false } }];\n"
+      }
+    },
+    {
+      "id": "8f4415af-f8f7-5d06-aa46-4482bcb8800b",
+      "name": "Any email?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1100,
+        100
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "6a1f2c3e-0b1d-4c8e-9f00-00000000c0a1",
+              "leftValue": "={{ $json.send }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "33d7e0dd-c047-55ce-a2b0-5edd060f19e8",
+      "name": "Loop one at a time",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        1320,
+        0
+      ],
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      }
+    },
+    {
+      "id": "7371776d-aef7-527f-9186-fb0ab78222a5",
+      "name": "Send via SES",
+      "type": "n8n-nodes-base.awsSes",
+      "typeVersion": 1,
+      "position": [
+        1540,
+        -60
+      ],
+      "parameters": {
+        "operation": "send",
+        "isBodyHtml": true,
+        "subject": "={{ $json.subject }}",
+        "body": "={{ $json.html }}",
+        "fromEmail": "={{ $env.SES_FROM_EMAIL }}",
+        "toAddresses": [
+          "={{ $json.recipient }}"
+        ],
+        "additionalFields": {}
+      },
+      "credentials": {
+        "aws": {
+          "id": "loanEngineSesCrd",
+          "name": "AWS SES"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "b746e2e0-f379-595c-bdfd-3f5c37340246",
+      "name": "Mark sent",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1760,
+        -140
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- After SES accepted the message. Also stamps the user's matches as notified, so the same\n-- offers are never emailed again. $1 notification_id, $2 SES message id\nWITH sent AS (\n  UPDATE notifications SET status = 'SENT', sent_at = now(), ses_message_id = $2, attempts = attempts + 1\n  WHERE id = $1::bigint AND status = 'PENDING'\n  RETURNING user_id\n)\nUPDATE matches m SET notified_at = now()\nFROM sent WHERE m.user_id = sent.user_id AND m.notified_at IS NULL\nRETURNING m.product_id;",
+        "options": {
+          "queryReplacement": "={{ [String($('Loop one at a time').item.json.notification_id), String($json.SendEmailResponse?.SendEmailResult?.MessageId ?? $json.MessageId ?? ('unknown:' + Object.keys($json).join('|')))] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "loanEngineDbCred",
+          "name": "Loan DB"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "id": "66373163-088d-5090-b589-f636aad0d8b8",
+      "name": "Mark failed",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1760,
+        40
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- SES rejected the message (after the node's own retries). Permanent after 3 attempts.\n-- $1 notification_id, $2 error text\nUPDATE notifications\nSET attempts = attempts + 1, last_error = left($2, 500),\n    status = CASE WHEN attempts + 1 >= 3 THEN 'FAILED' ELSE 'PENDING' END\nWHERE id = $1::bigint\nRETURNING id, status;",
+        "options": {
+          "queryReplacement": "={{ [String($('Loop one at a time').item.json.notification_id), String($json.error?.message ?? $json.error ?? 'SES error')] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "loanEngineDbCred",
+          "name": "Loan DB"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "id": "4f264631-7828-5452-9565-12d10347bc64",
+      "name": "Throttle 1 s",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1980,
+        -60
+      ],
+      "parameters": {
+        "amount": 1,
+        "unit": "seconds"
+      },
+      "webhookId": "b1e7c0de-0000-4000-8000-00000000c001"
+    },
+    {
+      "id": "5f7a4bd2-7a1d-520d-8a0e-56b76a5415eb",
+      "name": "Finish",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1540,
+        220
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Close the batch: counts for the UI, NOTIFYING → DONE. $1 batch_id\nWITH counts AS (\n  SELECT count(*) FILTER (WHERE status = 'SENT') AS sent,\n         count(*) FILTER (WHERE status = 'FAILED') AS failed,\n         count(*) FILTER (WHERE status = 'PENDING') AS pending\n  FROM notifications WHERE batch_id = $1::uuid\n), ev AS (\n  INSERT INTO pipeline_events (batch_id, stage, status, detail)\n  SELECT $1::uuid, 'notify', 'completed', to_jsonb(counts) FROM counts\n), done AS (\n  UPDATE ingest_batches SET status = 'DONE', updated_at = now()\n  WHERE id = $1::uuid AND status = 'NOTIFYING'\n)\nSELECT * FROM counts;",
+        "options": {
+          "queryReplacement": "={{ [$('Claim batch').first().json.batch_id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "loanEngineDbCred",
+          "name": "Loan DB"
+        }
+      },
+      "executeOnce": true
+    }
+  ],
+  "connections": {
+    "Called by workflow B": {
+      "main": [
+        [
+          {
+            "node": "Claim batch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claim batch": {
+      "main": [
+        [
+          {
+            "node": "Queue notifications",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Queue notifications": {
+      "main": [
+        [
+          {
+            "node": "Load pending",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load pending": {
+      "main": [
+        [
+          {
+            "node": "Render emails",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Render emails": {
+      "main": [
+        [
+          {
+            "node": "Any email?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Any email?": {
+      "main": [
+        [
+          {
+            "node": "Loop one at a time",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Finish",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop one at a time": {
+      "main": [
+        [
+          {
+            "node": "Finish",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send via SES",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send via SES": {
+      "main": [
+        [
+          {
+            "node": "Mark sent",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Mark failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark sent": {
+      "main": [
+        [
+          {
+            "node": "Throttle 1 s",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark failed": {
+      "main": [
+        [
+          {
+            "node": "Throttle 1 s",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Throttle 1 s": {
+      "main": [
+        [
+          {
+            "node": "Loop one at a time",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Kolkata",
+    "saveDataSuccessExecution": "all",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": "loanEngineErrorE"
+  },
+  "pinData": {},
+  "tags": []
+}

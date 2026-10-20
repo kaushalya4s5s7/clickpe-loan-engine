@@ -1,0 +1,63 @@
+{
+  "id": "loanEngineErrorE",
+  "name": "E · Error handler",
+  "active": false,
+  "nodes": [
+    {
+      "id": "805bf249-6c31-5817-8500-c57e6061c888",
+      "name": "On workflow error",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "c2b909d9-ae72-53ed-8921-c2edf53f89d3",
+      "name": "Record failure",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        240,
+        0
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- $1 batch_id (nullable), $2 stage, $3 status, $4 detail JSON\nINSERT INTO pipeline_events (batch_id, stage, status, detail)\nVALUES (nullif($1, '')::uuid, $2, $3, coalesce(nullif($4, ''), '{}')::jsonb);",
+        "options": {
+          "queryReplacement": "={{ ['', 'workflow', 'failed', JSON.stringify({ workflow: $json.workflow?.name, node: $json.execution?.lastNodeExecuted, message: String($json.execution?.error?.message ?? '').slice(0, 500), execution: $json.execution?.url }) ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "loanEngineDbCred",
+          "name": "Loan DB"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "On workflow error": {
+      "main": [
+        [
+          {
+            "node": "Record failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Kolkata",
+    "saveDataSuccessExecution": "all",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "pinData": {},
+  "tags": []
+}
