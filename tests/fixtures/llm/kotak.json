@@ -1,0 +1,12 @@
+{"products": [{
+  "product_name": "Personal Loan", "interest_rate_min": 10.99, "interest_rate_max": null,
+  "min_monthly_income": 30000, "min_credit_score": 750, "accepts_ntc": false, "min_age": 21, "max_age": 60,
+  "employment_types": ["Salaried"], "max_loan_amount": 10000000, "max_tenure_months": null,
+  "soft_rules": [
+    {"text": "Kotak salary account holders qualify from ₹25,000 net monthly income", "depends_on": ["bank_relationship", "monthly_income"]},
+    {"text": "At least one year of work experience", "depends_on": ["work_experience"]},
+    {"text": "Employed with an MNC, public limited company, or private limited company", "depends_on": ["employer_type"]}],
+  "evidence": {"interest_rate": "Starting from 10.99% per annum", "min_monthly_income": "Minimum net monthly income of ₹ 30,000",
+               "min_credit_score": "A CIBIL score of 750 or above", "age": "Individuals aged between 21 years and 60 years are eligible.",
+               "max_loan_amount": "up to Rs. 1 Crore"}
+}]}

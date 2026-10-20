@@ -1,0 +1,15 @@
+{"products": [
+ {"product_name": "Personal Loan (Salaried)", "interest_rate_min": 9.99, "interest_rate_max": 16.5,
+  "min_monthly_income": 30000, "min_credit_score": 700, "accepts_ntc": false, "min_age": 18, "max_age": 58,
+  "employment_types": ["Salaried"], "max_loan_amount": null, "max_tenure_months": null,
+  "soft_rules": [{"text": "Total work experience of 2 years", "depends_on": ["work_experience"]},
+                 {"text": "Minimum salary differs by employer type and relationship with ICICI Bank", "depends_on": ["employer_type", "bank_relationship"]}],
+  "evidence": {"interest_rate": "Between 9.99% and 16.50% per annum", "min_monthly_income": "Minimum monthly income of ₹30,000",
+               "min_credit_score": "A credit score of 700 and above is preferred", "age": "Age: Between 18 years and 58 years"}},
+ {"product_name": "Personal Loan (Self-Employed)", "interest_rate_min": 9.99, "interest_rate_max": 16.5,
+  "min_monthly_income": null, "min_credit_score": 700, "accepts_ntc": false, "min_age": 23, "max_age": 65,
+  "employment_types": ["Self-Employed", "Business"], "max_loan_amount": null, "max_tenure_months": null,
+  "soft_rules": [{"text": "2 years in the current business and total experience of at least 3 years", "depends_on": ["business_vintage"]}],
+  "evidence": {"interest_rate": "Between 9.99% and 16.50% per annum", "min_credit_score": "A credit score of 700 and above is preferred",
+               "age": "Minimum age is 23 years, maximum age at the end of the tenure is 65 years"}}
+]}

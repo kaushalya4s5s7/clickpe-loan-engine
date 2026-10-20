@@ -1,0 +1,10 @@
+{"products": [{
+  "product_name": "Personal Loan", "interest_rate_min": 9.99, "interest_rate_max": null,
+  "min_monthly_income": 25000, "min_credit_score": null, "accepts_ntc": false, "min_age": 21, "max_age": 60,
+  "employment_types": ["Salaried"], "max_loan_amount": null, "max_tenure_months": null,
+  "soft_rules": [
+    {"text": "Minimum 2 years of total work experience, with at least 1 year in the current organisation", "depends_on": ["work_experience"]},
+    {"text": "Employees of private limited companies or public sector undertakings", "depends_on": ["employer_type"]}],
+  "evidence": {"interest_rate": "Starting From 9.99% p.a.", "min_monthly_income": "minimum net monthly income of ₹25,000",
+               "age": "Individuals aged 21 to 60 years"}
+}]}
