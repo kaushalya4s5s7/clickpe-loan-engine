@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.env
+.serverless/
+build/
+n8n_data/
+*.log
+.DS_Store
+node_modules/
+*.tsbuildinfo

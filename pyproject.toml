@@ -1,0 +1,28 @@
+[project]
+name = "loan-eligibility-engine-harness"
+version = "1.0.0"
+description = "Python test/eval harness. The backend is Go (go.mod); this checks n8n's SQL+JS against it."
+requires-python = ">=3.12"
+dependencies = []
+
+[dependency-groups]
+dev = ["psycopg[binary]>=3.2,<3.3", "pytest>=8", "ruff>=0.6"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests", "apps/workflows"]
+addopts = "-q --import-mode=importlib"
+
+[tool.ruff]
+line-length = 130
+target-version = "py312"
+extend-exclude = ["build", ".venv", "node_modules"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM"]
+
+[tool.ruff.lint.per-file-ignores]
+# embedded Code-node JavaScript and ASCII flow diagrams; SQL literals in tests
+"apps/workflows/src/workflows/*.py" = ["E501"]
+"tests/**" = ["E501"]
+"**/tests/**" = ["E501"]
+"scripts/*" = ["E501"]

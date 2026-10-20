@@ -1,0 +1,90 @@
+# Local stack: n8n (+ its Postgres) and, in local mode, the application database.
+#   docker compose up -d                      → n8n on http://localhost:5678
+#   docker compose --profile tunnel up -d     → + public HTTPS URL for the Lambda doorbell
+#   docker compose --profile queue up -d      → n8n queue mode: Redis + a worker (Tier-2 shape)
+# All configuration comes from .env (copy .env.example).
+
+x-n8n-env: &n8n-env
+  N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY:?set N8N_ENCRYPTION_KEY in .env}
+  GENERIC_TIMEZONE: Asia/Kolkata
+  TZ: Asia/Kolkata
+  DB_TYPE: postgresdb                      # n8n's own state (executions, credentials) — not app data
+  DB_POSTGRESDB_HOST: postgres
+  DB_POSTGRESDB_DATABASE: n8n
+  DB_POSTGRESDB_USER: postgres
+  DB_POSTGRESDB_PASSWORD: ${LOCAL_PG_PASSWORD:-postgres}
+  EXECUTIONS_MODE: ${EXECUTIONS_MODE:-regular}
+  QUEUE_BULL_REDIS_HOST: redis
+  EXECUTIONS_DATA_PRUNE: "true"            # n8n's execution log must not grow forever
+  EXECUTIONS_DATA_MAX_AGE: "168"           # hours
+  N8N_RUNNERS_ENABLED: "true"
+  NODE_FUNCTION_ALLOW_BUILTIN: crypto      # Code nodes: HMAC verification + hashing
+  N8N_BLOCK_ENV_ACCESS_IN_NODE: "false"    # workflows read the non-secret settings below via $env
+  N8N_DIAGNOSTICS_ENABLED: "false"
+  WEBHOOK_URL: ${N8N_PUBLIC_URL:-http://localhost:5678/}
+  # --- read by the workflows ($env) — secrets go into credentials, not here ---
+  N8N_WEBHOOK_SECRET: ${N8N_WEBHOOK_SECRET:?set N8N_WEBHOOK_SECRET in .env}
+  LLM_BASE_URL: ${LLM_BASE_URL}
+  LLM_MODEL: ${LLM_MODEL}
+  LLM_ENABLED: ${LLM_ENABLED:-true}
+  SES_FROM_EMAIL: ${SES_FROM_EMAIL}
+  TEST_MODE: ${TEST_MODE:-true}
+  TEST_RECIPIENTS: ${TEST_RECIPIENTS}
+  MAX_EMAILS_PER_RUN: ${MAX_EMAILS_PER_RUN:-5}
+  UNSUBSCRIBE_BASE_URL: ${UNSUBSCRIBE_BASE_URL}
+  UNSUBSCRIBE_SECRET: ${UNSUBSCRIBE_SECRET:?set UNSUBSCRIBE_SECRET in .env}
+
+services:
+  postgres:
+    image: postgres:16.10-alpine
+    environment:
+      POSTGRES_PASSWORD: ${LOCAL_PG_PASSWORD:-postgres}
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      - ./apps/workflows/docker/create_databases.sql:/docker-entrypoint-initdb.d/00_create.sql:ro
+    ports: ["127.0.0.1:5432:5432"]          # localhost only
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      retries: 10
+
+  n8n:
+    image: n8nio/n8n:2.42.7
+    depends_on:
+      postgres: {condition: service_healthy}
+    entrypoint: ["/bin/sh", "/init/init.sh"]
+    environment:
+      <<: *n8n-env
+      APP_DATABASE_URL: ${APP_DATABASE_URL:-postgresql://postgres:postgres@postgres:5432/loan_engine}
+      SES_REGION: ${SES_REGION:-ap-south-1}
+      SES_ACCESS_KEY_ID: ${SES_ACCESS_KEY_ID}
+      SES_SECRET_ACCESS_KEY: ${SES_SECRET_ACCESS_KEY}
+      LLM_API_KEY: ${LLM_API_KEY}
+    ports: ["127.0.0.1:5678:5678"]
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ./apps/workflows/dist:/workflows:ro
+      - ./apps/workflows/docker:/init:ro
+
+  cloudflared:                              # public HTTPS for the doorbell, no inbound ports opened
+    image: cloudflare/cloudflared:2025.9.1
+    profiles: [tunnel]
+    command: tunnel --no-autoupdate --url http://n8n:5678
+    depends_on: [n8n]
+
+  redis:
+    image: redis:7.4-alpine
+    profiles: [queue]
+
+  n8n-worker:
+    image: n8nio/n8n:2.42.7
+    profiles: [queue]
+    command: worker
+    environment:
+      <<: *n8n-env
+      EXECUTIONS_MODE: queue
+    depends_on: [redis, postgres]
+
+volumes:
+  pg_data:
+  n8n_data:
