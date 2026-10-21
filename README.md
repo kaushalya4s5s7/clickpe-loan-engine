@@ -187,6 +187,7 @@ go test ./...                # Go backend: each test gets its own fresh database
 node --test apps/workflows/tests/*.test.js
 cd apps/web && npm test && npm run typecheck && npm run build
 ```
+CI (`.github/workflows/ci.yml`) runs all of the above on every push and PR against a real Postgres service, plus a gitleaks secret scan, `gofmt`/`go vet`, the arm64 Lambda build, a check that `apps/workflows/dist/` matches its sources, and shellcheck on the deploy scripts. The **Deploy ready** job turns green only when every check passes.
 
 ---
 

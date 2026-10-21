@@ -1,0 +1,12 @@
+# gitleaks: default rules, minus known-fake fixtures (tests use made-up secrets; .env.example is blank).
+[extend]
+useDefault = true
+
+[allowlist]
+description = "test fixtures and the blank env template"
+paths = [
+  '''_test\.go$''',
+  '''\.test\.(js|ts)$''',
+  '''^tests/''',
+  '''\.env\.example$''',
+]
