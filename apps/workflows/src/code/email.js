@@ -39,7 +39,9 @@ function reasons(user, p) {
   const r = [];
   if (p.min_monthly_income != null) r.push(`income ${formatINR(user.monthly_income)}/month ≥ ${formatINR(p.min_monthly_income)} minimum`);
   if (p.min_credit_score != null && user.credit_score != null) r.push(`credit score ${user.credit_score} ≥ ${p.min_credit_score}`);
-  if (p.min_age != null || p.max_age != null) r.push(`age ${user.age} within ${p.min_age ?? "–"}–${p.max_age ?? "–"}`);
+  if (p.min_age != null && p.max_age != null) r.push(`age ${user.age} within ${p.min_age}–${p.max_age}`);
+  else if (p.min_age != null) r.push(`age ${user.age} ≥ ${p.min_age} minimum`);
+  else if (p.max_age != null) r.push(`age ${user.age} ≤ ${p.max_age} maximum`);
   if (Array.isArray(p.employment_types) && p.employment_types.length) r.push(`${user.employment_status} applicants accepted`);
   return r;
 }
@@ -50,9 +52,24 @@ const firstName = (name) => String(name ?? "").trim().split(/\s+/)[0] || "there"
  * @param n  {user_id, name, monthly_income, credit_score, employment_status, age, products:[...]}
  * @param o  {unsubscribeBase, secret, now (seconds), maxCards}
  */
+/**
+ * Pick cards across lenders: each lender's best product first (in score order), then second-best, ...
+ * Without this, one lender's Salaried/Self-Employed variants can fill every card.
+ */
+function pickCards(products, max) {
+  const byLender = new Map();
+  for (const p of products) (byLender.get(p.lender_name) ?? byLender.set(p.lender_name, []).get(p.lender_name)).push(p);
+  const out = [];
+  for (let round = 0; out.length < max && out.length < products.length; round++) {
+    for (const list of byLender.values()) if (list[round] && out.length < max) out.push(list[round]);
+  }
+  return out;
+}
+
 function renderEmail(n, o) {
-  const products = (n.products || []).slice(0, o.maxCards ?? 3);
+  const products = pickCards(n.products || [], o.maxCards ?? 5);
   const more = (n.products || []).length - products.length;
+  const lenders = new Set((n.products || []).map((p) => p.lender_name)).size;
   const name = firstName(n.name);
   const token = unsubscribeToken(n.user_id, o.secret, o.now);
   const unsubscribeUrl = `${o.unsubscribeBase}?t=${encodeURIComponent(token)}`;
@@ -79,7 +96,7 @@ ${todo ? `<div style="margin-top:10px;font-size:14px;color:#a16207;font-weight:6
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:560px">
 <tr><td style="padding:0 4px 16px;font-size:16px;color:#18181b">Hi ${escapeHtml(name)},<br><br>Based on the details shared with us, you may be eligible for these personal loans:</td></tr>
 ${cards}
-${more > 0 ? `<tr><td style="padding:0 4px 12px;font-size:14px;color:#3f3f46">+ ${more} more option${more === 1 ? "" : "s"} matched your profile.</td></tr>` : ""}
+${more > 0 ? `<tr><td style="padding:0 4px 12px;font-size:14px;color:#3f3f46">+ ${more} more option${more === 1 ? "" : "s"} matched your profile, across ${lenders} lender${lenders === 1 ? "" : "s"} in total.</td></tr>` : ""}
 <tr><td style="padding:8px 4px;font-size:12px;line-height:1.5;color:#71717a">These are indicative matches based on publicly listed criteria — not loan offers or approvals. Final eligibility, rates and amounts are decided by the lender.<br><br>
 You're receiving this because you shared your details for loan offers. <a href="${escapeHtml(unsubscribeUrl)}" style="color:#71717a">Unsubscribe</a></td></tr>
 </table></td></tr></table></body></html>`;
@@ -91,7 +108,7 @@ You're receiving this because you shared your details for loan offers. <a href="
       ...reasons(n, p).map((r) => `  ✓ ${r}`), ...(p.unverified || []).map((u) => `  ? To confirm: ${u}`),
       `  ${p.source_url}`, "",
     ]),
-    more > 0 ? `+ ${more} more option(s) matched your profile.\n` : "",
+    more > 0 ? `+ ${more} more option(s) matched your profile, across ${lenders} lender(s) in total.\n` : "",
     "Indicative matches only — not loan offers. The lender decides final eligibility.",
     `Unsubscribe: ${unsubscribeUrl}`,
   ].join("\n");
@@ -100,5 +117,5 @@ You're receiving this because you shared your details for loan offers. <a href="
 }
 
 if (typeof module !== "undefined") {
-  module.exports = { renderEmail, unsubscribeToken, formatINR, escapeHtml, reasons };
+  module.exports = { renderEmail, pickCards, unsubscribeToken, formatINR, escapeHtml, reasons };
 }

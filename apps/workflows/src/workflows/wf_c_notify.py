@@ -23,7 +23,7 @@ def build() -> dict:
 // One personalised email per pending notification (HTML-escaped, Indian number format, the
 // user's own numbers held against each lender's rules, unverifiable conditions shown honestly).
 const now = Math.floor(Date.now() / 1000);
-const opts = { unsubscribeBase: $env.UNSUBSCRIBE_BASE_URL, secret: $env.UNSUBSCRIBE_SECRET, now, maxCards: 3 };
+const opts = { unsubscribeBase: $env.UNSUBSCRIBE_BASE_URL, secret: $env.UNSUBSCRIBE_SECRET, now, maxCards: 5 };
 const out = [];
 for (const item of $input.all()) {
   const n = item.json;

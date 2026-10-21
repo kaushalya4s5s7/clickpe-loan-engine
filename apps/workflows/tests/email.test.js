@@ -1,6 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { renderEmail, unsubscribeToken, formatINR, escapeHtml } = require("../src/code/email.js");
+const { renderEmail, pickCards, reasons, unsubscribeToken, formatINR, escapeHtml } = require("../src/code/email.js");
 const { verifyDoorbell } = require("../src/code/signature.js");
 const { parseJsonContent, parseJudgments } = require("../src/code/llm.js");
 const crypto = require("crypto");
@@ -16,17 +16,33 @@ const user = { user_id: "U1", name: "<script>alert(1)</script> Rahul", monthly_i
   ] };
 
 test("personalised, escaped, honest email", () => {
-  const e = renderEmail(user, { unsubscribeBase: "https://api/dev/v1/unsubscribe", secret: "s".repeat(20), now: 1000 });
+  const e = renderEmail(user, { unsubscribeBase: "https://api/dev/v1/unsubscribe", secret: "s".repeat(20), now: 1000, maxCards: 3 });
   assert.match(e.subject, /4 personal loans/);
   assert.ok(!e.html.includes("<script>alert"), "names are HTML-escaped");
   assert.ok(e.html.includes("₹62,000/month ≥ ₹25,000 minimum"));
   assert.ok(e.html.includes("Interest 9.99–24% p.a."));
   assert.ok(e.html.includes("Minimum 2 years of work experience"));
-  assert.ok(e.html.includes("+ 1 more option"));
+  assert.ok(e.html.includes("+ 1 more option matched your profile, across 4 lenders"));
   assert.ok(e.html.includes("not loan offers"));
   assert.ok(e.text.includes("Unsubscribe: https://api/dev/v1/unsubscribe?t="));
   assert.ok(!e.html.includes("U1@") && !e.html.includes("62000.00"), "no raw PII dumps");
   assert.ok(Buffer.byteLength(e.html) < 100 * 1024, "under Gmail's clipping limit");
+});
+
+test("cards spread across lenders before repeating one", () => {
+  const p = (lender, name) => ({ lender_name: lender, product_name: name });
+  const ranked = [p("HDFC", "Salaried"), p("HDFC", "Self-Employed"), p("HDFC", "Doctors"), p("Axis", "PL"), p("SBI", "Xpress")];
+  assert.deepEqual(pickCards(ranked, 3).map((c) => `${c.lender_name}/${c.product_name}`), ["HDFC/Salaried", "Axis/PL", "SBI/Xpress"]);
+  assert.deepEqual(pickCards(ranked, 5).map((c) => c.product_name), ["Salaried", "PL", "Xpress", "Self-Employed", "Doctors"]);
+  assert.equal(pickCards(ranked, 10).length, 5);
+  assert.deepEqual(pickCards([], 5), []);
+});
+
+test("age reason reads naturally when a lender gives only one bound", () => {
+  const u = { age: 55, employment_status: "Salaried" };
+  assert.deepEqual(reasons(u, { min_age: 21, max_age: 60 }), ["age 55 within 21–60"]);
+  assert.deepEqual(reasons(u, { min_age: 23, max_age: null }), ["age 55 ≥ 23 minimum"]);
+  assert.deepEqual(reasons(u, { min_age: null, max_age: 58 }), ["age 55 ≤ 58 maximum"]);
 });
 
 test("INR formatting and escaping", () => {

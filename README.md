@@ -6,7 +6,7 @@ Upload a CSV of users → the system discovers personal-loan products on lender 
 | | |
 |---|---|
 | Tests | 39 Go tests (`go test ./...`, real Postgres, one fresh DB per test) · 33 Python harness tests (n8n SQL + JS against the Go binaries) · 17 workflow JS · 15 console TS |
-| Design docs | [Go guide (read first)](docs/GO-GUIDE.md) · [n8n guide](docs/N8N-GUIDE.md) · [DESIGN](docs/DESIGN.md) · [plain-English guide](docs/EXPLAINED.md) · [optimisation](docs/OPTIMIZATION.md) · [scale](docs/SCALE.md) · [brief → build map](docs/REQUIREMENTS.md) · [repo architecture](docs/REPO-ARCHITECTURE.md) |
+| Design docs | [Go guide (read first)](docs/GO-GUIDE.md) · [n8n guide](docs/N8N-GUIDE.md) · [DESIGN](docs/DESIGN.md) · [plain-English guide](docs/EXPLAINED.md) · [optimisation](docs/OPTIMIZATION.md) · [scale](docs/SCALE.md) · [brief → build map](docs/REQUIREMENTS.md) · [repo architecture](docs/REPO-ARCHITECTURE.md) · [issues we hit & fixes](docs/ISSUES.md) |
 
 ---
 
@@ -144,8 +144,11 @@ aws ssm put-parameter --region ap-south-1 --name /loan-engine/db-password       
 aws ssm put-parameter --region ap-south-1 --name /loan-engine/webhook-secret    --type SecureString --value "<N8N_WEBHOOK_SECRET from .env>"
 aws ssm put-parameter --region ap-south-1 --name /loan-engine/unsubscribe-secret --type SecureString --value "<UNSUBSCRIBE_SECRET from .env>"
 
-docker compose --profile tunnel up -d          # public HTTPS URL for n8n, no inbound ports
-docker compose logs cloudflared | grep trycloudflare.com
+# Public HTTPS URL for n8n, no inbound ports. Two choices:
+#  a) fixed URL (recommended): set NGROK_AUTHTOKEN + NGROK_DOMAIN (your free *.ngrok-free.dev) in .env
+docker compose --profile ngrok up -d           # → https://<NGROK_DOMAIN>, the same after every restart
+#  b) no account: Cloudflare quick tunnel — a NEW random URL on every start
+docker compose --profile tunnel up -d && docker compose logs cloudflared | grep trycloudflare.com
 #   → put "<url>/webhook/batch-loaded" in .env as N8N_WEBHOOK_URL, and "<url>/" as N8N_PUBLIC_URL
 
 bash scripts/build_lambdas.sh                  # static Go binaries for Lambda (linux/arm64, ~4 MB each)

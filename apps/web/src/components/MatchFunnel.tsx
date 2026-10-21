@@ -14,7 +14,9 @@ export function MatchFunnel({ funnel }: { funnel: Funnel }) {
     { name: "Every person × every loan", note: "what a naive system would evaluate", value: funnel.naive_pairs, kind: "" },
     { name: "Pass the hard rules", note: "income, credit score, age, employment", value: funnel.after_hard_rules, kind: "" },
     { name: "Have a qualitative condition", note: "e.g. work experience, employer type", value: funnel.needing_soft_rules, kind: "" },
-    { name: "Questions sent to the AI", note: `${num(funnel.llm_cache_hits)} answered from cache`, value: funnel.llm_keys, kind: "ai" },
+    // llm_keys is measured after the AI answered (always 0 then); llm_new_judgments is what was actually asked.
+    { name: "Questions sent to the AI", note: `answers reused for ${num(funnel.llm_cache_hits)} checks`,
+      value: funnel.llm_new_judgments ?? funnel.llm_keys, kind: "ai" },
     { name: "Matches", note: `${num(funnel.likely)} need a lender check`, value: funnel.matches, kind: "final" },
   ];
   return (

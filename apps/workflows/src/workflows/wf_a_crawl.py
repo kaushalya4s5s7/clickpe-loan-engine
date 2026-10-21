@@ -82,7 +82,10 @@ return { json: { ...g, request: llm.extractionRequest($env.LLM_MODEL, g.lender, 
         "method": "POST", "url": "={{ $env.LLM_BASE_URL.replace(/\\/$/, '') }}/chat/completions",
         "authentication": "genericCredentialType", "genericAuthType": "httpHeaderAuth",
         "sendBody": True, "specifyBody": "json", "jsonBody": "={{ JSON.stringify($json.request) }}",
-        "options": {"timeout": 90000, "response": {"response": {"neverError": True}}}},
+        # Bounded fan-out: 4 lenders in flight, then a 2 s pause. 15+ lenders fired at once trips the
+        # provider's per-minute limit (429) and burns retries; this stays under it at any lender count.
+        "options": {"timeout": 90000, "response": {"response": {"neverError": True}},
+                    "batching": {"batch": {"batchSize": 4, "batchInterval": 2000}}}},
         (1540, 0), credentials={"httpHeaderAuth": CREDENTIALS["httpHeaderAuth"]},
         retryOnFail=True, maxTries=3, waitBetweenTries=5000, onError="continueRegularOutput")
     w.code("Validate products", include("crawl") + include("llm") + """

@@ -71,6 +71,7 @@ export interface MatchFunnel {
   needing_soft_rules: number;
   llm_keys: number;
   llm_calls?: number;
+  llm_new_judgments?: number;
   llm_cache_hits: number;
   matches: number;
   likely: number;

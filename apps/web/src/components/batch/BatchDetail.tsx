@@ -97,6 +97,13 @@ export function BatchDetail() {
         </section>
       )}
 
+      {finished && batch.rows_inserted === 0 && batch.rows_updated === 0 && (batch.rows_valid ?? 0) > 0 && (
+        <p className="card card-pad muted small">
+          Every valid row matched a user already on file with identical details, so there was nothing new to match
+          or email. Users are never emailed twice for the same offer.
+        </p>
+      )}
+
       {funnel && (
         <section className="card">
           <div className="card-head">

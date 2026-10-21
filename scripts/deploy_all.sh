@@ -26,14 +26,28 @@ fi
 aws ssm put-parameter --name /loan-engine/webhook-secret --type SecureString --overwrite --value "$(envget N8N_WEBHOOK_SECRET)" >/dev/null
 aws ssm put-parameter --name /loan-engine/unsubscribe-secret --type SecureString --overwrite --value "$(envget UNSUBSCRIBE_SECRET)" >/dev/null
 
-echo "2/7 public HTTPS tunnel to n8n (Cloudflare quick tunnel; URL changes if the tunnel restarts)"
-docker compose --profile tunnel up -d cloudflared >/dev/null
-TUNNEL=""
-for _ in $(seq 1 30); do
-  TUNNEL=$(docker compose logs cloudflared 2>&1 | grep -oE "https://[a-z0-9-]+\.trycloudflare\.com" | tail -1 || true)
-  [ -n "$TUNNEL" ] && break; sleep 2
-done
-[ -n "$TUNNEL" ] || { echo "tunnel URL not found: docker compose logs cloudflared"; exit 1; }
+if [ -n "$(envget NGROK_DOMAIN)" ]; then
+  echo "2/7 public HTTPS tunnel to n8n (ngrok, fixed domain — survives restarts)"
+  [ -n "$(envget NGROK_AUTHTOKEN)" ] || { echo "NGROK_DOMAIN is set but NGROK_AUTHTOKEN is empty in .env"; exit 1; }
+  docker compose stop cloudflared >/dev/null 2>&1 || true
+  docker compose --profile ngrok up -d ngrok >/dev/null
+  TUNNEL="https://$(envget NGROK_DOMAIN)"
+  # Prove the URL reaches n8n before handing it to the Lambda (a wrong token/domain fails here, loudly).
+  for _ in $(seq 1 30); do curl -sf "$TUNNEL/healthz" >/dev/null && break; sleep 2; done
+  curl -sf "$TUNNEL/healthz" >/dev/null || { echo "ngrok not reachable at $TUNNEL: docker compose logs ngrok"; exit 1; }
+else
+  echo "2/7 public HTTPS tunnel to n8n (Cloudflare quick tunnel; URL changes if the tunnel restarts)"
+  # Recreate, don't just start: a restarted container keeps its old log lines, and grepping them
+  # returned the PREVIOUS run's dead URL — the Lambda then rang a host that no longer existed and
+  # every batch waited for the 2-minute sweeper. A fresh container's log holds only its own URL.
+  docker compose --profile tunnel up -d --force-recreate cloudflared >/dev/null
+  TUNNEL=""
+  for _ in $(seq 1 30); do
+    TUNNEL=$(docker compose logs cloudflared 2>&1 | grep -oE "https://[a-z0-9-]+\.trycloudflare\.com" | tail -1 || true)
+    [ -n "$TUNNEL" ] && break; sleep 2
+  done
+  [ -n "$TUNNEL" ] || { echo "tunnel URL not found: docker compose logs cloudflared"; exit 1; }
+fi
 envset N8N_WEBHOOK_URL "$TUNNEL/webhook/batch-loaded"
 envset N8N_PUBLIC_URL "$TUNNEL/"
 echo "    $TUNNEL"

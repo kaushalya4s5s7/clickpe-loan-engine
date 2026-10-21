@@ -1,6 +1,7 @@
 # Local stack: n8n (+ its Postgres) and, in local mode, the application database.
 #   docker compose up -d                      → n8n on http://localhost:5678
-#   docker compose --profile tunnel up -d     → + public HTTPS URL for the Lambda doorbell
+#   docker compose --profile ngrok up -d      → + public HTTPS at your fixed ngrok domain (NGROK_DOMAIN)
+#   docker compose --profile tunnel up -d     → + public HTTPS at a random Cloudflare URL (no account)
 #   docker compose --profile queue up -d      → n8n queue mode: Redis + a worker (Tier-2 shape)
 # All configuration comes from .env (copy .env.example).
 
@@ -67,10 +68,19 @@ services:
       - ./apps/workflows/docker:/init:ro
 
   cloudflared:                              # public HTTPS for the doorbell, no inbound ports opened
-    image: cloudflare/cloudflared:2025.9.1
+    image: cloudflare/cloudflared:2025.9.1  # quick tunnel: no account, but a NEW random URL every start
     profiles: [tunnel]
     command: tunnel --no-autoupdate --url http://n8n:5678
     depends_on: [n8n]
+
+  ngrok:                                    # same job, FIXED URL: the free dev domain survives restarts
+    image: ngrok/ngrok:3.39.11-alpine
+    profiles: [ngrok]
+    command: http --url=${NGROK_DOMAIN:-} n8n:5678
+    environment:
+      NGROK_AUTHTOKEN: ${NGROK_AUTHTOKEN:-}
+    depends_on: [n8n]
+    restart: unless-stopped                 # comes back with the same URL after Docker restarts
 
   redis:
     image: redis:7.4-alpine

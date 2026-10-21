@@ -63,7 +63,8 @@ code { font-family: var(--mono); font-size: 0.86em; }
 
 .container { width: 100%; max-width: 1200px; margin: 0 auto; padding: 0 24px; }
 @media (max-width: 560px) { .container { padding: 0 16px; } }
-.page { padding: 32px 0 72px; }
+/* Vertical only: shorthand `padding: 32px 0 72px` here wiped .container's side gutter on the same element. */
+.page { padding-top: 32px; padding-bottom: 72px; }
 .page-head { display: flex; justify-content: space-between; align-items: flex-end; gap: 16px; flex-wrap: wrap; margin-bottom: 24px; }
 .page-head h1 { font-family: var(--font-display), Georgia, serif; font-weight: 400; font-size: 44px; letter-spacing: -0.025em; margin-top: 10px; }
 .page-head p { color: var(--text-2); margin-top: 4px; }
@@ -71,6 +72,9 @@ code { font-family: var(--mono); font-size: 0.86em; }
 .muted { color: var(--muted); }
 .small { font-size: 13px; }
 .stack { display: grid; gap: 16px; }
+/* Grid children default to min-width: auto (never narrower than their widest content), so one wide
+   table pushed the whole page past a phone screen. With 0 they shrink and .table-wrap scrolls instead. */
+.stack > * { min-width: 0; }
 .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
 .spacer { flex: 1; }
 

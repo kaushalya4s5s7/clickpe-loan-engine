@@ -213,6 +213,12 @@
             "response": {
               "neverError": true
             }
+          },
+          "batching": {
+            "batch": {
+              "batchSize": 4,
+              "batchInterval": 2000
+            }
           }
         }
       },
