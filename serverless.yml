@@ -1,0 +1,325 @@
+# Loan Eligibility Engine — AWS infrastructure (Serverless Framework v3: `npx serverless@3 deploy`).
+#
+# Browser ─► CloudFront ─► S3 (Next.js static console, private bucket via OAC)
+# Browser ─► API Gateway (REST, API key + throttling, CORS) ─► λ uploads / batches / reporting / unsubscribe
+#    └─► S3 (presigned multipart PUTs) ─ObjectCreated─► SQS ─► λ ingest ─► RDS PostgreSQL
+#                                                       └─(3 failures)─► DLQ ─► alarm
+#                                         λ ingest ─ signed doorbell ─► n8n (Docker, via tunnel)
+#
+# Backend: Go, compiled to static arm64 binaries by scripts/build_lambdas.sh (run before deploy).
+#
+# Before the first deploy (see README → "Deploy to AWS"):
+#   aws ssm put-parameter --name /loan-engine/db-password --type SecureString --value "$(openssl rand -hex 24)"
+#   aws ssm put-parameter --name /loan-engine/webhook-secret --type SecureString --value "$(openssl rand -hex 32)"
+#   aws ssm put-parameter --name /loan-engine/unsubscribe-secret --type SecureString --value "$(openssl rand -hex 32)"
+
+service: loan-engine
+frameworkVersion: "3"
+useDotenv: true                        # N8N_WEBHOOK_URL, SES_FROM_EMAIL come from .env at deploy time
+
+provider:
+  name: aws
+  runtime: provided.al2023             # Go: a static binary named "bootstrap", no language runtime to load
+  architecture: arm64                  # Graviton: ~20% cheaper per ms than x86 for the same work
+  region: ap-south-1                   # Mumbai: low latency for Indian users, data stays in India
+  stage: ${opt:stage, 'dev'}
+  memorySize: 256                      # Go API handlers are I/O-bound and small
+  timeout: 29                          # API Gateway's integration limit
+  logRetentionInDays: 14
+  apiGateway:
+    apiKeys:
+      - name: loan-engine-${sls:stage}-ops
+    usagePlan:
+      throttle: {rateLimit: 10, burstLimit: 20}   # an abusive client can't flood presign/status calls
+      quota: {limit: 20000, period: DAY}
+  environment:
+    DATABASE_URL:
+      Fn::Join:
+        - ""
+        - - "postgresql://loanadmin:${ssm:/loan-engine/db-password}@"
+          - Fn::GetAtt: [Database, Endpoint.Address]
+          - ":5432/loan_engine?sslmode=require"
+    UPLOAD_BUCKET: !Ref UploadBucket
+    UNSUBSCRIBE_SECRET: ${ssm:/loan-engine/unsubscribe-secret}
+    N8N_WEBHOOK_URL: ${env:N8N_WEBHOOK_URL, ''}
+    N8N_WEBHOOK_SECRET: ${ssm:/loan-engine/webhook-secret}
+  iam:
+    role:
+      statements:
+        - Effect: Allow             # least privilege: only the uploads/ prefix of our bucket
+          Action: [s3:PutObject, s3:GetObject, s3:AbortMultipartUpload, s3:ListMultipartUploadParts]
+          Resource:
+            Fn::Join: ["", [Fn::GetAtt: [UploadBucket, Arn], "/uploads/*"]]
+
+package:
+  individually: true                   # each function ships only its own binary (built by scripts/build_lambdas.sh)
+
+functions:
+  # One function serves every HTTP route: all routes share the same dependencies (DB pool, S3 client),
+  # so one warm container answers them all — one cold start instead of thirteen. Routing is a table
+  # in apps/api/main.go keyed by "METHOD /resource".
+  api:
+    handler: bootstrap
+    package: {artifact: build/lambda/api.zip}
+    events:
+      - {http: {method: get, path: /v1/overview, cors: true}}            # public: aggregates only
+      - {http: {method: get, path: /v1/uploads/schema, cors: true}}      # public: accepted columns
+      - {http: {method: get, path: /v1/products, private: true, cors: true}}
+      - {http: {method: get, path: /v1/batches, private: true, cors: true}}
+      - {http: {method: post, path: /v1/uploads, private: true, cors: true}}
+      - {http: {method: post, path: "/v1/uploads/{batch_id}/part-urls", private: true, cors: true}}
+      - {http: {method: get, path: "/v1/uploads/{batch_id}/parts", private: true, cors: true}}
+      - {http: {method: post, path: "/v1/uploads/{batch_id}/complete", private: true, cors: true}}
+      - {http: {method: delete, path: "/v1/uploads/{batch_id}", private: true, cors: true}}
+      - {http: {method: get, path: "/v1/batches/{batch_id}", private: true, cors: true}}
+      - {http: {method: get, path: "/v1/batches/{batch_id}/errors.csv", private: true, cors: true}}
+      - {http: {method: get, path: /v1/unsubscribe, cors: true}}
+      - {http: {method: post, path: /v1/unsubscribe, cors: true}}
+  ingest:
+    handler: bootstrap
+    package: {artifact: build/lambda/ingest.zip}
+    timeout: 900                       # 1M rows measured at ~6 s; 10M ≈ 1 min — huge headroom
+    memorySize: 1024                   # Lambda CPU scales with memory; parsing is CPU-bound (peak RSS ~220 MB / 1M rows)
+    events:
+      - sqs:
+          arn: !GetAtt IngestQueue.Arn
+          batchSize: 1                 # one file per invocation: isolated failures, clean retries
+          functionResponseType: ReportBatchItemFailures
+          maximumConcurrency: 5        # backpressure: caps parallel DB connections
+
+resources:
+  # The console is served by CloudFront (HTTPS, private bucket) by default. New AWS accounts can't
+  # create CloudFront until AWS verifies them → `--param="cdn=false"` serves it as a public S3 website.
+  Conditions:
+    UseCdn: !Equals ["${param:cdn, 'true'}", "true"]
+    NoCdn: !Not [Condition: UseCdn]
+  Resources:
+    UploadBucket:
+      Type: AWS::S3::Bucket
+      DependsOn: IngestQueuePolicy
+      Properties:
+        BucketName: loan-engine-${sls:stage}-uploads-${aws:accountId}
+        BucketEncryption:
+          ServerSideEncryptionConfiguration: [{ServerSideEncryptionByDefault: {SSEAlgorithm: AES256}}]
+        PublicAccessBlockConfiguration:
+          {BlockPublicAcls: true, BlockPublicPolicy: true, IgnorePublicAcls: true, RestrictPublicBuckets: true}
+        CorsConfiguration:             # browsers PUT parts directly; ETag must be readable by JS
+          CorsRules:
+            - AllowedMethods: [PUT]
+              AllowedOrigins: ["*"]    # the presigned URL itself is the authorization
+              AllowedHeaders: ["*"]
+              ExposedHeaders: [ETag]
+              MaxAge: 3000
+        LifecycleConfiguration:
+          Rules:
+            - Id: abort-abandoned-multipart  # otherwise orphaned parts are stored (and billed) forever
+              Status: Enabled
+              AbortIncompleteMultipartUpload: {DaysAfterInitiation: 1}
+            - Id: expire-raw-uploads         # data minimisation (DPDP): raw files aren't kept
+              Status: Enabled
+              Prefix: uploads/
+              ExpirationInDays: 7
+        NotificationConfiguration:
+          QueueConfigurations:
+            - Event: s3:ObjectCreated:*
+              Queue: !GetAtt IngestQueue.Arn
+              Filter: {S3Key: {Rules: [{Name: prefix, Value: uploads/}]}}
+
+    IngestQueue:
+      Type: AWS::SQS::Queue
+      Properties:
+        VisibilityTimeout: 5400        # 6 × the ingest Lambda timeout (AWS guidance)
+        MessageRetentionPeriod: 345600
+        SqsManagedSseEnabled: true
+        RedrivePolicy: {deadLetterTargetArn: !GetAtt IngestDLQ.Arn, maxReceiveCount: 3}
+    IngestDLQ:
+      Type: AWS::SQS::Queue
+      Properties: {MessageRetentionPeriod: 1209600, SqsManagedSseEnabled: true}
+    IngestQueuePolicy:
+      Type: AWS::SQS::QueuePolicy
+      Properties:
+        Queues: [!Ref IngestQueue]
+        PolicyDocument:
+          Statement:
+            - Effect: Allow
+              Principal: {Service: s3.amazonaws.com}
+              Action: sqs:SendMessage
+              Resource: !GetAtt IngestQueue.Arn
+              Condition:
+                ArnLike: {"aws:SourceArn": "arn:aws:s3:::loan-engine-${sls:stage}-uploads-${aws:accountId}"}
+                StringEquals: {"aws:SourceAccount": !Ref AWS::AccountId}
+    DlqNotEmptyAlarm:
+      Type: AWS::CloudWatch::Alarm
+      Properties:
+        AlarmDescription: An uploaded file failed ingestion 3 times — inspect the DLQ
+        Namespace: AWS/SQS
+        MetricName: ApproximateNumberOfMessagesVisible
+        Dimensions: [{Name: QueueName, Value: !GetAtt IngestDLQ.QueueName}]
+        Statistic: Maximum
+        Period: 60
+        EvaluationPeriods: 1
+        Threshold: 0
+        ComparisonOperator: GreaterThanThreshold
+        TreatMissingData: notBreaching
+
+    DatabaseSecurityGroup:
+      Type: AWS::EC2::SecurityGroup   # default VPC
+      Properties:
+        GroupDescription: Postgres for loan-engine (TLS enforced by RDS)
+        SecurityGroupIngress:
+          # Demo trade-off (docs/DESIGN.md §9.12): Lambdas outside a VPC have changing IPs, and a VPC
+          # would need a ~$32/month NAT for the n8n doorbell. Production: private subnets + RDS Proxy.
+          - {IpProtocol: tcp, FromPort: 5432, ToPort: 5432, CidrIp: "${env:DB_ALLOWED_CIDR, '0.0.0.0/0'}"}
+    Database:
+      Type: AWS::RDS::DBInstance
+      DeletionPolicy: Delete           # demo stack: `serverless remove` must leave nothing billing
+      Properties:
+        Engine: postgres
+        EngineVersion: "16"
+        DBInstanceClass: db.t4g.micro  # free-tier eligible
+        AllocatedStorage: "20"
+        StorageType: gp3
+        DBName: loan_engine
+        MasterUsername: loanadmin
+        MasterUserPassword: "{{resolve:ssm-secure:/loan-engine/db-password}}"
+        PubliclyAccessible: true
+        VPCSecurityGroups: [!GetAtt DatabaseSecurityGroup.GroupId]
+        BackupRetentionPeriod: 1
+        StorageEncrypted: true
+        AutoMinorVersionUpgrade: true
+
+    SesSenderUser:                     # the n8n SES node signs in as this user: it can ONLY send, ONLY from our address
+      Type: AWS::IAM::User
+      Properties:
+        Policies:
+          - PolicyName: ses-send-only
+            PolicyDocument:
+              Statement:
+                - Effect: Allow
+                  Action: [ses:SendEmail, ses:SendRawEmail]
+                  Resource: "*"
+                  Condition: {StringEquals: {"ses:FromAddress": "${env:SES_FROM_EMAIL, 'unset@example.com'}"}}
+
+    # API Gateway's OWN errors (missing API key, throttling) need CORS headers too, or the browser
+    # reports a vague CORS failure instead of "403 Forbidden".
+    GatewayResponseDefault4XX:
+      Type: AWS::ApiGateway::GatewayResponse
+      Properties:
+        RestApiId: !Ref ApiGatewayRestApi
+        ResponseType: DEFAULT_4XX
+        ResponseParameters:
+          gatewayresponse.header.Access-Control-Allow-Origin: "'*'"
+          gatewayresponse.header.Access-Control-Allow-Headers: "'Content-Type,X-Api-Key'"
+    GatewayResponseDefault5XX:
+      Type: AWS::ApiGateway::GatewayResponse
+      Properties:
+        RestApiId: !Ref ApiGatewayRestApi
+        ResponseType: DEFAULT_5XX
+        ResponseParameters:
+          gatewayresponse.header.Access-Control-Allow-Origin: "'*'"
+
+    # ---- the operations console (Next.js static export) ----
+    WebBucket:
+      Type: AWS::S3::Bucket
+      Properties:
+        BucketName: loan-engine-${sls:stage}-web-${aws:accountId}
+        PublicAccessBlockConfiguration:      # CDN: private, only CloudFront can read it (OAC below)
+          Fn::If:
+            - UseCdn
+            - {BlockPublicAcls: true, BlockPublicPolicy: true, IgnorePublicAcls: true, RestrictPublicBuckets: true}
+            - {BlockPublicAcls: true, BlockPublicPolicy: false, IgnorePublicAcls: true, RestrictPublicBuckets: false}
+        WebsiteConfiguration:                # no CDN: S3 serves /upload/ → upload/index.html itself
+          Fn::If: [NoCdn, {IndexDocument: index.html, ErrorDocument: 404.html}, !Ref AWS::NoValue]
+        BucketEncryption:
+          ServerSideEncryptionConfiguration: [{ServerSideEncryptionByDefault: {SSEAlgorithm: AES256}}]
+    WebPublicReadPolicy:                     # no CDN only: the console is static, public files
+      Type: AWS::S3::BucketPolicy
+      Condition: NoCdn
+      Properties:
+        Bucket: !Ref WebBucket
+        PolicyDocument:
+          Statement:
+            - Effect: Allow
+              Principal: "*"
+              Action: s3:GetObject
+              Resource:
+                Fn::Join: ["", [Fn::GetAtt: [WebBucket, Arn], "/*"]]
+    WebOriginAccessControl:
+      Type: AWS::CloudFront::OriginAccessControl
+      Condition: UseCdn
+      Properties:
+        OriginAccessControlConfig:
+          Name: loan-engine-${sls:stage}-web
+          OriginAccessControlOriginType: s3
+          SigningBehavior: always
+          SigningProtocol: sigv4
+    WebIndexRewrite:                         # /upload/ → /upload/index.html (S3 REST origins don't do this)
+      Type: AWS::CloudFront::Function
+      Condition: UseCdn
+      Properties:
+        Name: loan-engine-${sls:stage}-index-rewrite
+        AutoPublish: true
+        FunctionConfig: {Comment: Serve index.html for directory URLs, Runtime: cloudfront-js-2.0}
+        FunctionCode: |
+          function handler(event) {
+            var r = event.request;
+            if (r.uri.endsWith('/')) r.uri += 'index.html';
+            else if (!r.uri.includes('.')) r.uri += '/index.html';
+            return r;
+          }
+    WebDistribution:
+      Type: AWS::CloudFront::Distribution
+      Condition: UseCdn
+      Properties:
+        DistributionConfig:
+          Enabled: true
+          Comment: Loan Engine operations console
+          DefaultRootObject: index.html
+          PriceClass: PriceClass_200        # includes India edge locations
+          HttpVersion: http2and3
+          Origins:
+            - Id: web
+              DomainName: !GetAtt WebBucket.RegionalDomainName
+              OriginAccessControlId: !GetAtt WebOriginAccessControl.Id
+              S3OriginConfig: {OriginAccessIdentity: ""}
+          DefaultCacheBehavior:
+            TargetOriginId: web
+            ViewerProtocolPolicy: redirect-to-https
+            Compress: true
+            CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6   # AWS managed "CachingOptimized"
+            ResponseHeadersPolicyId: 67f7725c-6f97-4210-82d7-5512b31e9d03  # AWS managed "SecurityHeadersPolicy"
+            FunctionAssociations:
+              - EventType: viewer-request
+                FunctionARN: !GetAtt WebIndexRewrite.FunctionMetadata.FunctionARN
+          CustomErrorResponses:
+            - {ErrorCode: 403, ResponseCode: 404, ResponsePagePath: /404.html}
+    WebBucketPolicy:
+      Type: AWS::S3::BucketPolicy
+      Condition: UseCdn
+      Properties:
+        Bucket: !Ref WebBucket
+        PolicyDocument:
+          Statement:
+            - Effect: Allow
+              Principal: {Service: cloudfront.amazonaws.com}
+              Action: s3:GetObject
+              Resource:
+                Fn::Join: ["", [Fn::GetAtt: [WebBucket, Arn], "/*"]]
+              Condition:
+                StringEquals:
+                  AWS:SourceArn:
+                    Fn::Join: ["", ["arn:aws:cloudfront::", !Ref AWS::AccountId, ":distribution/", !Ref WebDistribution]]
+
+  Outputs:
+    WebUrl:
+      Value:
+        Fn::If:
+          - UseCdn
+          - {"Fn::Join": ["", ["https://", {"Fn::GetAtt": [WebDistribution, DomainName]}]]}
+          - {"Fn::GetAtt": [WebBucket, WebsiteURL]}
+    WebBucketName: {Value: !Ref WebBucket}
+    WebDistributionId: {Condition: UseCdn, Value: !Ref WebDistribution}
+    UploadBucketName: {Value: !Ref UploadBucket}
+    DatabaseHost: {Value: !GetAtt Database.Endpoint.Address}
+    IngestDeadLetterQueue: {Value: !Ref IngestDLQ}
+    SesSenderUserName: {Value: !Ref SesSenderUser}
