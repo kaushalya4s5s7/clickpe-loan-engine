@@ -1,0 +1,15 @@
+.lender { margin-bottom: 28px; }
+.lender h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin-bottom: 12px; display: flex; gap: 10px; align-items: center; }
+.grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); }
+.product { padding: 20px; display: grid; gap: 14px; align-content: start; }
+.name { font-family: var(--font-display), Georgia, serif; font-size: 28px; line-height: 1.1; letter-spacing: -0.02em; }
+.rate { font-size: 20px; font-weight: 600; margin-top: 6px; }
+.criteria { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 0; }
+.criteria div { background: var(--surface-2); border-radius: 10px; padding: 8px 10px; }
+.criteria dt { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
+.criteria dd { margin: 2px 0 0; font-weight: 600; font-size: 14px; }
+.chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.rules { margin: 0; padding-left: 18px; font-size: 13px; color: var(--text-2); display: grid; gap: 4px; }
+.evidence summary { cursor: pointer; font-size: 13px; color: var(--accent); }
+.evidence blockquote { margin: 8px 0 0; padding: 6px 10px; border-left: 3px solid var(--line); font-size: 13px; color: var(--text-2); }
+.foot { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; color: var(--muted); border-top: 1px solid var(--line); padding-top: 12px; }

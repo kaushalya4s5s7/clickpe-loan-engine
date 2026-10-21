@@ -1,0 +1,27 @@
+{
+  "name": "loan-engine-web",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Operations console for the Loan Eligibility Engine (Next.js static export → S3 + CloudFront)",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test \"src/lib/**/*.test.ts\""
+  },
+  "dependencies": {
+    "@noble/hashes": "1.8.0",
+    "next": "16.3.8",
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
+  },
+  "devDependencies": {
+    "@types/node": "22.18.6",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.2.3",
+    "typescript": "5.9.3"
+  },
+  "engines": {
+    "node": ">=22.18"
+  }
+}

@@ -1,0 +1,10 @@
+.footer { background: var(--footer); color: #fff; padding: 56px 0 0; overflow: hidden; margin-top: auto; }
+.cta h2 { font-family: var(--font-display), Georgia, serif; font-weight: 400; font-size: 34px; letter-spacing: -0.02em; }
+.cta p { color: var(--footer-muted); margin: 6px 0 20px; }
+.meta { margin-top: 48px; font-size: 13px; color: var(--footer-muted); display: flex; gap: 16px; flex-wrap: wrap; }
+.meta a { color: var(--footer-muted); text-decoration: underline; }
+/* A giant wordmark drawn in dots: the dot pattern is clipped to the text. */
+.wordmark { font-family: var(--font-display), Georgia, serif; font-size: clamp(80px, 17vw, 260px); line-height: 0.85; text-align: center;
+  letter-spacing: -0.03em; white-space: nowrap; margin-top: 32px; user-select: none;
+  background: radial-gradient(#3a4a66 1.1px, #0000 1.2px) 0 0 / 6px 6px; -webkit-background-clip: text; background-clip: text; color: transparent;
+  transform: translateY(14%); }

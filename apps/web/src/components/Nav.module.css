@@ -1,0 +1,14 @@
+.bar { position: sticky; top: 0; z-index: 20; background: rgb(255 255 255 / 0.9); backdrop-filter: blur(10px); border-bottom: 1px solid var(--line); }
+.inner { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 16px; height: 68px; }
+.brand { font-family: var(--font-display), Georgia, serif; font-size: 30px; letter-spacing: -0.02em; color: var(--text); text-decoration: none !important; line-height: 1; white-space: nowrap; }
+.links { display: flex; gap: 4px; justify-content: center; }
+.link { padding: 8px 12px; border-radius: 8px; color: var(--muted); font-size: 15px; white-space: nowrap; text-decoration: none !important; }
+.link:hover { color: var(--text); }
+.active { color: var(--text); font-weight: 500; }
+.actions { display: flex; gap: 10px; justify-content: flex-end; }
+@media (max-width: 860px) {
+  .inner { grid-template-columns: 1fr auto; height: auto; padding-top: 12px; padding-bottom: 12px; row-gap: 8px; }
+  .links { grid-column: 1 / -1; grid-row: 2; justify-content: flex-start; overflow-x: auto; scrollbar-width: none; margin: 0 -12px; }
+  .brand { font-size: 26px; }
+  .hideSm { display: none !important; }
+}

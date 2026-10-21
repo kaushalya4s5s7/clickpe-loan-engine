@@ -1,0 +1,13 @@
+.rows { display: grid; gap: 12px; }
+.row { display: grid; grid-template-columns: minmax(150px, 220px) 1fr auto; gap: 12px; align-items: center; }
+.name { font-size: 14px; font-weight: 500; }
+.name small { display: block; color: var(--muted); font-weight: 400; font-size: 12px; }
+.track { height: 26px; border-radius: 8px; background: var(--surface-2); overflow: hidden; }
+.fill { height: 100%; border-radius: 8px; background: var(--accent); min-width: 3px; }
+.fill.final { background: var(--ok); }
+.fill.ai { background: #f5bd4f; }
+.value { font-variant-numeric: tabular-nums; font-weight: 600; min-width: 80px; text-align: right; }
+.callout { margin-top: 16px; display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
+.box { padding: 12px 14px; border-radius: 10px; background: var(--surface-2); font-size: 13px; color: var(--text-2); }
+.box b { display: block; font-family: var(--font-display), Georgia, serif; font-weight: 400; font-size: 26px; color: var(--text); }
+@media (max-width: 640px) { .row { grid-template-columns: 1fr auto; } .track { grid-column: 1 / -1; grid-row: 2; } }
