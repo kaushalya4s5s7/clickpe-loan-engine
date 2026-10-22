@@ -8,7 +8,7 @@ Upload a CSV of users → the system discovers personal-loan products on lender 
 | | |
 |---|---|
 | GitHub repository (private) | **https://github.com/kaushalya4s5s7/clickpe-loan-engine** |
-| Demonstration video (5–10 min) | **[VIDEO LINK]** |
+| Demonstration video (5–10 min) | **https://drive.google.com/drive/folders/1KtFQy6kbc3yavtGPWl6req-0r7M3-Tgo** |
 | Presentation deck (used in the video) | **https://claude.ai/artifact/33Q3sRHLCF5L5zUzZodn1w** |
 | Live console (CSV upload UI) | **https://main.d25bd5m5z7i2j8.amplifyapp.com** (AWS Amplify, ap-south-1) |
 
@@ -27,7 +27,7 @@ Upload a CSV of users → the system discovers personal-loan products on lender 
 | **Architecture diagram** | [Architecture](#architecture) below (more detail: [SYSTEM-FLOW](docs/SYSTEM-FLOW.md)) |
 | **Setup & deployment**, including **n8n credentials (AWS, database)** | [Setup](#setup), the credentials table in step 1 |
 | **Design decisions**: workflow design, **web crawling strategy**, **Optimization Treasure Hunt** | [Workflow design](#workflow-design) · [Web crawling strategy](#web-crawling-strategy) · [Treasure Hunt](#the-optimisation-treasure-hunt-workflow-b) · [Decisions table](#design-decisions-and-what-we-rejected) |
-| **Demonstration video**: architecture, every n8n node, live CSV upload → PostgreSQL → products → matches → email | [Video](#submission-links) · [deck](https://claude.ai/artifact/33Q3sRHLCF5L5zUzZodn1w) |
+| **Demonstration video**: architecture, every n8n node, live CSV upload → PostgreSQL → products → matches → email | [Video](https://drive.google.com/drive/folders/1KtFQy6kbc3yavtGPWl6req-0r7M3-Tgo) · [deck](https://claude.ai/artifact/33Q3sRHLCF5L5zUzZodn1w) |
 
 ---
 
