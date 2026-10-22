@@ -1,7 +1,7 @@
 # Loan Eligibility Engine — System Design
 
 > Derived from first principles: **requirements → numbers → interfaces → architecture → deep dives → failure analysis.**
-> Companion docs: [`EXPLAINED.md`](./EXPLAINED.md) (plain English), [`SCALE.md`](./SCALE.md) (ClickPe context and capacity tiers), [`OPTIMIZATION.md`](./OPTIMIZATION.md) (per-component optimization), [`REQUIREMENTS.md`](./REQUIREMENTS.md) (brief → build mapping), [`REPO-ARCHITECTURE.md`](./REPO-ARCHITECTURE.md) (code layout and boundaries).
+> Companion docs: [`SCALE.md`](./SCALE.md) (ClickPe context and capacity tiers), [`OPTIMIZATION.md`](./OPTIMIZATION.md) (per-component optimization), [`REQUIREMENTS.md`](./REQUIREMENTS.md) (brief → build mapping), [`REPO-ARCHITECTURE.md`](./REPO-ARCHITECTURE.md) (code layout and boundaries).
 > Every decision lists the alternative we rejected and why, so it can be defended at a whiteboard.
 
 ---

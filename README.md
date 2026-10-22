@@ -6,7 +6,7 @@ Upload a CSV of users → the system discovers personal-loan products on lender 
 | | |
 |---|---|
 | Tests | 39 Go tests (`go test ./...`, real Postgres, one fresh DB per test) · 33 Python harness tests (n8n SQL + JS against the Go binaries) · 17 workflow JS · 15 console TS |
-| Design docs | [Go guide (read first)](docs/GO-GUIDE.md) · [n8n guide](docs/N8N-GUIDE.md) · [DESIGN](docs/DESIGN.md) · [plain-English guide](docs/EXPLAINED.md) · [optimisation](docs/OPTIMIZATION.md) · [scale](docs/SCALE.md) · [brief → build map](docs/REQUIREMENTS.md) · [repo architecture](docs/REPO-ARCHITECTURE.md) · [issues we hit & fixes](docs/ISSUES.md) |
+| Design docs | [DESIGN](docs/DESIGN.md) · [optimisation](docs/OPTIMIZATION.md) · [scale](docs/SCALE.md) · [brief → build map](docs/REQUIREMENTS.md) · [repo architecture](docs/REPO-ARCHITECTURE.md) · [issues we hit & fixes](docs/ISSUES.md) |
 
 ---
 
