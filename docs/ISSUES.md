@@ -132,7 +132,76 @@ and it must retry itself.
 
 ---
 
-## 5. Earlier setup issues (short list)
+## 5. Most matches said "to confirm", even for simple products
+
+**What you saw.** On `users.csv`, only 18,614 of 93,031 matches were *eligible*. Almost everything else was
+*likely, still to confirm*, and the email's "still to confirm" list was full of lines like *"loan amount varies by
+location"* or *"insurance is mandatory"*. Those aren't things a person has to prove.
+
+**What was really going on.** For each product the AI also writes down "soft rules": requirements the typed fields
+(income, credit score, age, employment) can't hold, like "2 years of work experience". A match with any soft rule we
+can't check becomes *to confirm*. The AI was putting notes about the **loan**, not the **applicant**, into that list:
+
+| Written as a rule | Why it isn't one |
+|---|---|
+| "Loan amount varies by location", "property ownership affects eligibility" | Describes the loan amount, not who can apply |
+| "Insurance is mandatory" | A product term |
+| "Must be an Indian resident" | Every applicant already is |
+| "Steady income", "meet minimum salary requirements" | A vague restatement of the income field, with no number |
+| "A score of 700 is ideal" | A preference, not a requirement |
+
+One bad line was enough to push a whole product into *to confirm* for everyone. Once, the AI even put a Russian word
+in the middle of an English rule.
+
+**How we fixed it.** Three changes, all in Workflow A:
+
+1. **The prompt now says what a rule is** (`extract-v4` in `apps/workflows/src/code/llm.js`): a requirement the
+   applicant must meet, and an explicit list of things that are not rules (amounts, fees, insurance, documents,
+   preferences, residency, vague restatements).
+2. **A plain-code safety net**, `isApplicantRule()` in `apps/workflows/src/code/crawl.js`. It drops anything that
+   matches the "not a rule" patterns, and any rule containing a non-Latin letter that doesn't appear on the page.
+   It doesn't depend on the AI behaving.
+3. **The page hash now includes the prompt version.** The crawler skips the AI when a page's text hash is unchanged.
+   Now a new prompt version changes the hash, so every page is re-read with the new prompt. One catch: a
+   *304 Not Modified* from the bank still stops before the hash, so for this release we cleared the saved crawl
+   state once by hand.
+
+**Result on `users.csv`.**
+
+| | Before | After |
+|---|---|---|
+| Eligible matches (of 93,031) | 18,614 | 36,068 |
+
+7 products now have eligible people. The *to confirm* matches left are real requirements we don't have data for: being an existing customer (RBL, HSBC),
+work experience (HDFC, ICICI, IndusInd, Poonawalla, Kotak) and employer type. Those are what the confirmation flow
+(Workflow D) asks about.
+
+**The lesson.** An AI-extracted field that changes a decision needs a definition in the prompt **and** a check in
+code. And a cache keyed on the input must also be keyed on the prompt, or a better prompt never runs.
+
+---
+
+## 6. The AI judge read "2 years" as "exactly 2 years"
+
+**What you saw.** In the first live test of the confirmation form, a person said they had 15 years of work
+experience. HDFC, Poonawalla and Bank of Baroda moved to pre-qualified, but ICICI was *removed* as "doesn't fit".
+
+**What was really going on.** ICICI's page says "Total years of work experience: 2 years". The AI judge
+read that literally: "the rule requires exactly 2 years, but the profile states 15", so it answered FAIL.
+We found it by reading the judge's reasons in the n8n execution log.
+
+**How we fixed it.** The judge's instructions now say that a number in an eligibility rule is a **minimum**
+unless the text says it is a maximum ("up to", "or younger"). Re-checked against the real model: 15 years
+passes, 1 year fails, and "80 years or younger" still works as a maximum. We re-matched the batch, which
+brought the ICICI offer back as "to confirm", and the same answers then confirmed it. Separately, a
+re-match no longer overwrites matches that a person has already confirmed.
+
+**The lesson.** Read the AI's *reasons*, not just its verdicts. One wrong reason exposed an ambiguity
+that would have quietly removed good offers for many people.
+
+---
+
+## 7. Earlier setup issues (short list)
 
 | Issue | Cause | Fix |
 |---|---|---|

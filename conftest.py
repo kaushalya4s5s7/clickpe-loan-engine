@@ -129,6 +129,9 @@ def workflow_b(sql, js):
         arrays = [js("matcher", "pgArray", cuts[k]) for k in ("income", "credit", "age")]
         loaded = sql("b_load_classes", batch_id, *arrays)[0]
         result = js("matcher", "matchClasses", loaded["classes"], products, cuts, judgments or {})
+        by_id = {p["id"]: p for p in products}  # Final match: the console's "questions could unlock" figures
+        result["funnel"]["question_plan"] = js("questions", "planForClasses", result["rows"], by_id,
+                                               {"classes": loaded["classes"], "maxQuestions": 3, "maxCards": 5})
         saved = sql("b_save_matches", batch_id, result["rows"], *arrays, result["funnel"])[0]
         return {"products": products, "loaded": loaded, "result": result, "saved": saved}
 

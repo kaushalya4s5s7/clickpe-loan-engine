@@ -55,6 +55,16 @@ export interface BatchView {
   timeline: PipelineEvent[];
   errors_preview: ErrorRow[];
   summary: BatchSummary;
+  /** Absent from APIs that predate workflow D. */
+  confirmations?: Confirmations;
+}
+
+/** How the "to confirm" questions went for one upload (workflow D). Answers are self-declared. */
+export interface Confirmations {
+  asked: number;     // sent emails that carried a question link
+  answered: number;  // people who submitted answers
+  flagged: number;   // contradictory answers held for ops review, not used
+  unlocked: number;  // matches that moved from "to confirm" to eligible on those answers
 }
 
 export type BatchListItem = Pick<Batch,
@@ -76,6 +86,22 @@ export interface MatchFunnel {
   matches: number;
   likely: number;
   new_matches?: number;
+  /** Absent for batches matched before questions existed. */
+  question_plan?: QuestionPlan;
+}
+
+/** Which facts our data can't answer are asked to the person instead (workflow B → C). */
+export interface QuestionPlan {
+  users_to_ask: number;
+  unlockable_matches: number;
+  by_question: QuestionPlanItem[];
+}
+
+export interface QuestionPlanItem {
+  id: string;          // work_experience | employer_type | bank_accounts | city | business_vintage | existing_emi
+  label: string;       // plain-English question, as the person sees it
+  users: number;       // people this question is asked to
+  unlockable: number;  // "to confirm" offers it can unlock
 }
 
 export interface Overview {

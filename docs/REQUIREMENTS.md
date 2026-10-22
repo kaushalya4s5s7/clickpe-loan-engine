@@ -74,7 +74,7 @@ Rubric: **n8n 30** · **Cloud 20** · **Backend & code quality 30** · **Docs & 
 |---|---|---|---|---|
 | C1 | "run **after** the matching process (Workflow B) is complete" | B's last node: **Execute Workflow → C** | n8n 30 | — |
 | C2 | "For each user who has **new matches**" | `matches.notified_at IS NULL` → group per user. Re-runs never resend | n8n 30 | — |
-| C3 | "construct a **personalized** email" | Name, top products, rate, why they qualify, what's still to confirm, disclaimer | Docs/video 20 | — |
+| C3 | "construct a **personalized** email" | Name, top products, rate, why they qualify, what's still to confirm, disclaimer. Plus, when worth it, a signed link to ≤ 3 questions (Workflow D, §4 below) | Docs/video 20 | — |
 | C4 | "Using the **AWS SES node in n8n**" | The built-in **AWS SES** node (not HTTP Request), HTML body, Loop + Wait for the 1/s sandbox rate | n8n 30 | **Verify the SES node's fields** (HTML, additional options). Custom headers like List-Unsubscribe are likely unsupported, so those are documented, not built |
 | C5 | "send… to a test inbox you control… **Do not email the sample CSV addresses**" | Recipient rewrite `<gmail>+u<n>@gmail.com` + **allowlist guard** that refuses anything else. (The sample emails are `@example.com`, a reserved domain, so they'd bounce anyway) | n8n 30 | **SES sandbox:** sender and each recipient must be verified. Test whether each `+alias` needs its own verification (the link lands in the same inbox) |
 | C6 | "Show one received email in the demonstration video" | Gmail filter "never send to Spam" for our sender → the email shows in the inbox | Video 20 | Mail from gmail.com via SES may hit Spam without the filter |
@@ -126,3 +126,16 @@ Rubric: **n8n 30** · **Cloud 20** · **Backend & code quality 30** · **Docs & 
 | R8 | LLM free-tier limits | One test call; note RPM | The cache + breaker keep us functional |
 | R9 | Serverless Framework v4 login | `npx serverless --version` + login | Serverless v3 / the open-source fork |
 | R10 | Disk space for Docker | `df -h` (1.9 GB free last check) | Free space before pulling images |
+
+---
+
+## 4. Beyond the brief: Workflow D (ask, don't guess)
+
+The brief stops at "email each user their matches". It doesn't say what to do with matches we can't fully decide. This is our own addition.
+
+| What we saw | What we built | Rubric | Risk / limit |
+|---|---|---|---|
+| On `users.csv`, 56,963 of 93,031 matches are "to confirm". They are blocked by only ~5 unknown facts (work experience, bank relationship, employer type, city, business vintage) | A planner picks ≤ 3 questions per person, per fact not per lender, only if the answer would unlock an offer worth showing. Computed per profile for the console, so it scales with classes, not users | n8n 30 ("creative use of n8n nodes… logic") | A rule in category "other" (apart from EMI affordability) can't be asked; that match stays "to confirm" |
+| Asking needs a safe way back in | A signed, expiring link in the existing weekly email → `GET webhook/confirm?t=…` (form) → `POST webhook/confirm-submit`. Two Webhook + Respond to Webhook nodes in `D_confirm.json` | n8n 30, Cloud 20 ("secure integration") | Needs the public n8n URL (the same tunnel as the doorbell) |
+| Answers must not become "approvals" | Sanity checks → answers stored as self-declared → re-check only that person's LIKELY matches with the existing LLM judge → "pre-qualified (self-declared)" email. Contradictions flagged for ops, not used. The lender still verifies documents | Code 30 | Self-declared data can be false. Production path: consented data (Account Aggregator bank statements, bureau soft pull, EPFO) instead of a form |
+| Ops need to see whether it works | Funnel event `question_plan` (from B) and `confirmations: {asked, answered, flagged, unlocked}` on `GET /v1/batches/{id}` | Docs/video 20 | — |

@@ -73,16 +73,32 @@ def test_crawl_match_notify_end_to_end(db, sql, js, workflow_b, go_ingest, batch
     assert sql("c_claim_batch", batch_id) == [{"batch_id": batch_id}]
     assert sql("c_queue_notifications", batch_id, "true", ALIASES, "3")[0] == {"users_with_new_matches": 4, "queued": 3}
     pending = sql("c_load_pending", batch_id)
-    emails = [js("email", "renderEmail", n, {"unsubscribeBase": "https://api/v1/unsubscribe",
-                                             "secret": "test-unsubscribe-secret-0123456789", "now": 1_700_000_000})
-              for n in pending]
+    secret, now = "test-unsubscribe-secret-0123456789", 1_700_000_000
+    emails, plans = [], []
+    for n in pending:  # the "Render emails" node: plan questions, sign the link, render
+        plan = js("questions", "planQuestions", n, n["products"], {p["product_id"]: p for p in n["products"]},
+                  {"maxQuestions": 3, "maxCards": 5})
+        url = js("questions", "confirmLink", "https://hooks.example", n["user_id"], secret, now) if plan["questions"] else None
+        confirm = {"url": url, "questions": plan["questions"], "unlockable": plan["unlockable"], "lenders": plan["lenders"]} if url else None
+        emails.append(js("email", "renderEmail", n, {"unsubscribeBase": "https://api/v1/unsubscribe", "secret": secret,
+                                                     "now": now, "confirm": confirm}))
+        plans.append(plan if url else None)
     priya = next(e for e, n in zip(emails, pending, strict=True) if n["user_id"] == "P1")
+    priya_plan = next(p for p, n in zip(plans, pending, strict=True) if n["user_id"] == "P1")
+    # All three of Priya's offers wait on facts the CSV lacks; three answers can confirm every one.
+    assert priya_plan["questions"] == ["work_experience", "employer_type", "bank_accounts"]
+    assert priya_plan["unlockable"] == 3 and sorted(priya_plan["lenders"]) == ["HDFC Bank", "ICICI Bank", "Kotak Mahindra Bank"]
+    assert "https://hooks.example/webhook/confirm?t=c." in priya["html"] and "self-declared" in priya["text"]
+    assert "Answer 3 quick questions to confirm up to 3 offers from" in priya["html"]
+    assert "approved" not in priya["html"].lower()
     assert priya["subject"] == "Priya, 3 personal loans you may qualify for"
     assert "HDFC Bank" in priya["html"] and "Interest 9.99–16.5% p.a." in priya["html"]
     assert "₹62,000/month ≥ ₹25,000 minimum" in priya["html"]
     assert "At least one year of work experience" in priya["html"]  # Kotak's unverifiable rule shown honestly
     assert all(n["recipient"] in ALIASES for n in pending), "never a sample-CSV address"
-    for n in pending:
-        sql("c_mark_sent", str(n["notification_id"]), f"ses-{n['notification_id']}")
+    for n, plan in zip(pending, plans, strict=True):
+        sql("c_mark_sent", str(n["notification_id"]), f"ses-{n['notification_id']}", json.dumps(plan["questions"]) if plan else "")
+    asked = dict(db.execute("SELECT user_id, questions FROM notifications WHERE status = 'SENT'").fetchall())
+    assert asked["P1"] == priya_plan["questions"], "Workflow D serves exactly the questions the email asked"
     assert sql("c_finish", batch_id)[0] == {"sent": 3, "failed": 0, "pending": 0}
     assert batch_status(batch_id) == "DONE"

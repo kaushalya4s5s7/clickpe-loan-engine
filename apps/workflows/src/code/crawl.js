@@ -112,6 +112,29 @@ function toNumber(v) {
   return Number.isFinite(n) ? n : null;
 }
 
+// Soft rules decide ELIGIBLE vs LIKELY, so a loan-amount note mistaken for a rule would put every
+// match "to confirm". The prompt says what a rule is; this is the safety net if the LLM ignores it.
+const NOT_A_RULE = [
+  /\bloan amount\b|\bamount of (personal )?loan\b|\bvaries by location\b/i,  // loan size, not the applicant
+  /\binsurance\b|\bprocessing fee\b|\bdocuments?\b/i,                          // product terms and process
+  /\baffects? (the )?eligibility\b|\bfaster approvals?\b|\bbetter terms\b|\battractive\b/i,
+  /\b(is|are) (preferred|ideal)\b/i,                                           // a preference, not a requirement
+  /\b(indian (resident|citizen)s?|resident (of|in) india|citizen of india)\b/i, // all applicants are
+];
+const VAGUE_RESTATEMENT = /\b(steady|stable|regular) (monthly )?(income|salary)\b|\bminimum salary requirements?\b/i;
+
+/**
+ * True if `text` is a concrete requirement on the applicant (as opposed to a note about the loan).
+ * With `page`, letters outside basic Latin must also occur on the page (an LLM glitch once put a
+ * Russian word inside an English rule).
+ */
+function isApplicantRule(text, page = null) {
+  const t = text.trim();
+  if (!t || NOT_A_RULE.some((re) => re.test(t))) return false;
+  if (page !== null && [...t].some((ch) => /\p{L}/u.test(ch) && ch > "ɏ" && !page.includes(ch))) return false;
+  return !(VAGUE_RESTATEMENT.test(t) && !/\d/.test(t));  // vague and no number: the typed fields cover it
+}
+
 /**
  * Turn the LLM's JSON into rows we trust. Every typed field must be backed by a quote that
  * appears VERBATIM in the page text and contains the number; otherwise the field is dropped
@@ -154,7 +177,7 @@ function validateProducts(extracted, { lender, sourceText, sourceUrl }) {
     p.employment_types = types.length ? [...new Set(types)].sort() : null;  // null = any
     p.accepts_ntc = raw.accepts_ntc === true && page.includes(norm(evidence.accepts_ntc ?? "\u0000"));
     p.soft_rules = (Array.isArray(raw.soft_rules) ? raw.soft_rules : [])
-      .filter((r) => r && typeof r.text === "string" && r.text.trim())
+      .filter((r) => r && typeof r.text === "string" && isApplicantRule(r.text, sourceText))
       .slice(0, 8)
       .map((r) => ({ text: r.text.trim().slice(0, 300),
                      depends_on: (Array.isArray(r.depends_on) ? r.depends_on : []).map(String).slice(0, 4) }));
@@ -174,5 +197,5 @@ function validateProducts(extracted, { lender, sourceText, sourceUrl }) {
 }
 
 if (typeof module !== "undefined") {
-  module.exports = { htmlToText, relevantSection, sha256, validateProducts, numberAppears, decodeEntities };
+  module.exports = { htmlToText, relevantSection, sha256, validateProducts, numberAppears, decodeEntities, isApplicantRule };
 }

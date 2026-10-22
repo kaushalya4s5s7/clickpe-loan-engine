@@ -29,6 +29,7 @@ Build an **embedded engine** that ingests borrower data at any size, keeps a liv
 | FR10 | Process bounces, complaints and unsubscribes; never email a suppressed address again | System |
 | FR11 | Re-match when the product catalogue changes; notify only on *new* offers | System |
 | FR12 *(embed)* | Online eligibility lookup for a single user (ClickPe app) | ClickPe services |
+| FR13 *(beyond the brief)* | Ask a user the few facts that would turn their "to confirm" offers into pre-qualified ones, and re-check only their matches | User (n8n WF-D) |
 
 **Out of scope:** loan application, KYC, credit bureau pulls, disbursal.
 
@@ -79,11 +80,12 @@ All mutating endpoints accept an **`Idempotency-Key`** header (the client retrie
 | `GET /v1/uploads/{batch_id}/parts` | Resume: which parts S3 already has | Wraps `ListParts` |
 | `POST /v1/uploads/{batch_id}/complete` | Finish | Body `{parts:[{n, etag}]}` → server calls `CompleteMultipartUpload`, re-checks total size, status `UPLOADED` |
 | `DELETE /v1/uploads/{batch_id}` | Abort | `AbortMultipartUpload` |
-| `GET /v1/batches/{batch_id}` | Status + timeline + funnel | Polled by the UI with backoff |
+| `GET /v1/batches/{batch_id}` | Status + timeline + funnel | Polled by the UI with backoff. Includes `confirmations: {asked, answered, flagged, unlocked}` (§9.16) |
 | `GET /v1/batches/{batch_id}/errors.csv` | Error report | 302 redirect to a short-lived presigned GET |
 | `POST /v1/batches/{batch_id}/approve` | Release notifications | Resumes the n8n Wait node via its resume URL (server-side; the UI never sees it) |
 | `GET /v1/users/{user_id}/offers` | Online eligibility (FR12) | Stretch |
 | `GET /v1/unsubscribe?t=<signed token>` + `POST` (RFC 8058 one-click) | Unsubscribe | Token = HMAC(user_id, tenant, expiry); no PII in the URL |
+| `GET webhook/confirm?t=<signed token>` · `POST webhook/confirm-submit` (n8n, not API Gateway) | Confirmation form and its submit (FR13) | HTML in, HTML out. Token domain-separated from the unsubscribe token (§9.16) |
 
 **Error model:** `{error:{code, message, details}}` with stable codes (`FILE_TOO_LARGE`, `QUOTA_EXCEEDED`, `BATCH_NOT_FOUND`, `INVALID_STATE`).
 
@@ -112,7 +114,7 @@ All mutating endpoints accept an **`Idempotency-Key`** header (the client retrie
                          └──────────────────────────────────────────────────────────────┼──────────────┘
                                                                                         ▼
                           Cloudflare Tunnel (no open ports) ──► n8n (Docker) + its own Postgres
-                              WF-A crawl (cron) · WF-B match · WF-C notify · WF-S sweeper · WF-E errors
+                              WF-A crawl (cron) · WF-B match · WF-C notify · WF-D confirm · WF-S sweeper · WF-E errors
 ```
 
 ### Hop by hop, and why each hop exists
@@ -200,6 +202,20 @@ Cron 02:00 IST → per site (isolated branch, continue-on-fail):
  → drift alarm: product count drop > 50% or null-rate spike
 ```
 
+### 7.6 Confirm (FR13) — n8n WF-D (beyond the brief)
+```
+WF-B: planForClasses (per class × class size) → question_plan in the funnel event (console)
+WF-C: planQuestions for each user emailed → email gets a signed link (≤ 3 questions) → notifications.questions = ids asked
+User clicks → GET webhook/confirm?t=… → verify token → HTML form with only that person's questions
+User submits → POST webhook/confirm-submit
+ ├─ verify token again; sanity checks on the answers
+ ├─ contradictory → user_declarations.flagged = true + reasons → ops; answers NOT used
+ ├─ upsert user_declarations (self-declared answers, batch_id)
+ ├─ re-check only this user's LIKELY matches (same rule + LLM-judge path as WF-B)
+ ├─ unlocked → matches: status ELIGIBLE, unverified [], decided_by DECLARED; user_declarations.unlocked = n
+ └─ SES email "you now pre-qualify (self-declared)" to the address C last used → HTML result page
+```
+
 ---
 
 ## 8. Data model (PostgreSQL)
@@ -220,11 +236,14 @@ loan_products(id PK, product_key UNIQUE, lender_name, lender_regulated_entity, p
 loan_product_versions(product_id, criteria_hash, snapshot jsonb, valid_from)
 class_matches(class_id PK, product_mask bit varying, catalog_version, computed_at)
 matches(user_id, product_id, rank, score, status ELIGIBLE|LIKELY, reasons jsonb, unverified jsonb,
-        batch_id, decided_by SQL|RULE|LLM, first_matched_at, notified_at,
+        batch_id, decided_by SQL|RULE|LLM|DECLARED, first_matched_at, notified_at,
         PRIMARY KEY(user_id, product_id))   -- name exactly as the brief says; Tier 1 stores every pair (~32k rows)
 llm_judgments(cache_key PK, verdict, rationale, model, prompt_version, tokens_in, tokens_out, created_at)
 notifications(id, user_id, tenant_id, channel, digest_key, recipient, status, ses_message_id,
-              attempts, last_error, sent_at, delivered_at, UNIQUE(user_id, digest_key))
+              attempts, last_error, sent_at, delivered_at, questions jsonb NULL /* ids asked; NULL = no link */,
+              UNIQUE(user_id, digest_key))
+user_declarations(user_id PK, batch_id, answers jsonb, flagged bool, flag_reasons jsonb, unlocked int,
+                  declared_at, updated_at)   -- WF-D, self-declared answers (migration 007)
 suppression(email_hash PK, reason bounce|complaint|unsubscribe, created_at)
 outbox(id, batch_id, event, created_at, processed_at) · pipeline_events(batch_id, stage, status, counts jsonb, ms, at)
 crawl_runs(id, site, status, products_found, changed, error, at)
@@ -459,6 +478,8 @@ Unsubscribe (one click) · Privacy policy · ClickPe, Surat, India
 | Partner | Exceeding fair share | Usage plans, quotas, fair scheduling |
 | Internet | Forged doorbell / approval | HMAC + timestamp (±5 min); state checks in the DB; the n8n resume URL is never exposed to the browser |
 | Internet | Unsubscribe-link tampering | HMAC-signed token with expiry; no PII in links |
+| Internet | Confirmation-link tampering or reuse as an unsubscribe token | HMAC-SHA256 token, 14-day expiry, constant-time compare, `c.` prefix domain-separates it from the unsubscribe token; an invalid link shows "this link has expired" and leaks nothing |
+| User | False answers on the confirmation form | Sanity checks; contradictions flagged for ops and not used; offers labelled "self-declared"; the lender verifies documents |
 | Crawled site | Prompt injection | No tools, schema, verbatim evidence, plausibility |
 | LLM vendor | PII exposure | Only projected features leave our system |
 | Leaked n8n creds | Mass email | SES IAM policy restricted to `ses:SendEmail` + `ses:FromAddress` condition; approval gate; complaint breaker |
@@ -559,6 +580,29 @@ Why Go beat its own projection (a 32% gain was expected from the parse share alo
 
 The decision rests on measurements anyone can rerun (OPTIMIZATION §12).
 
+### 9.16 Asking instead of guessing (WF-D, beyond the brief)
+**The problem.** A match is LIKELY ("to confirm") when a lender rule depends on data the CSV doesn't have. On `users.csv` (10,000 people) that is **56,963 LIKELY matches**. They look like 57k separate problems, but they are blocked by only **~5 unknown facts**: work experience, bank relationship, employer type, city, business vintage. Plus Bank of Baroda's "income should be sufficient to repay the EMI", which the judge answers UNKNOWN.
+
+**The planner** (`planQuestions` in `apps/workflows/src/code/questions.js`, pure functions, `node --test`):
+- **Per fact, not per lender.** Each unverified rule maps to a question id through the product's `soft_rules[].depends_on`: `work_experience`, `employer_type`, `bank_accounts`, `city`, `business_vintage`, and `existing_emi` for EMI/repayment rules. A rule in `other` (non-EMI) can't be asked, so that match stays LIKELY.
+- **Worth asking.** An unlocked match would score `100 − 2 × rate` (the matcher's own formula with nothing unverified). If the user already has ≥ 5 ELIGIBLE matches scoring at least that, we don't ask about it.
+- **≤ 3 questions.** Choose the subset of question ids that unlocks the most matches; on a tie, fewer questions. With ≤ 6 ids, exhaustive search is trivial. Nothing to unlock → no questions.
+- **Per profile.** For the console, `planForClasses` runs once per class × class size, so cost is O(classes), not O(users). The result goes into WF-B's funnel event as `question_plan: {users_to_ask, unlockable_matches, by_question}`.
+
+**The link.** `c.<b64url(user_id)>.<exp>.<b64url(hmac16)>`: HMAC-SHA256 with `UNSUBSCRIBE_SECRET`, first 16 bytes, 14-day expiry. The `c.` prefix means an unsubscribe token can't be used here, and the reverse. No PII in the URL.
+
+**The answer.** Sanity checks → store in `user_declarations` → re-check only that user's LIKELY matches through the existing LLM judge → unlocked matches become `ELIGIBLE` with `decided_by = 'DECLARED'` → one email listing them as *pre-qualified (self-declared)*. The email goes to the recipient of that user's latest SENT notification (already test-mode rewritten), never `users.email` directly.
+
+**Honesty rules.** Copy never says "approved". Contradictory answers are flagged for ops (`flagged`, `flag_reasons`) and not used. The lender still verifies documents at application.
+
+**Production path.** Self-declaration is the demo. In production the same facts come from consented data: Account Aggregator bank statements (income, salary account, existing EMIs), a bureau soft pull, EPFO (work history). The planner stays the same; only the source of the answer changes.
+
+*Rejected:*
+- **Leaving "to confirm" as is.** 56,963 of 93,031 matches (61%) never become actionable.
+- **One question per unverified rule or per lender.** Dozens of questions; most people would stop.
+- **Asking everyone everything.** Many answers would unlock offers worse than ones the person already has.
+- **A separate "please answer" email.** One more email per user; the link rides in the existing weekly email.
+
 ---
 
 ## 10. Failure mode analysis (FMEA)
@@ -618,6 +662,7 @@ The decision rests on measurements anyone can rerun (OPTIMIZATION §12).
 | At-least-once email | At-most-once | A lost loan offer is worse than a rare duplicate |
 | Public RDS (TLS-only, strong password) for the demo | Private RDS + NAT | ~$32/mo avoided; Lambda IPs can't be allowlisted; production path documented |
 | Polling for status | WebSockets / SSE | Minute-long jobs; simplest reliable option |
+| Self-declared answers for "to confirm" facts (WF-D) | Consented data (Account Aggregator, bureau, EPFO) | Works today with no partner integration; labelled self-declared; the lender verifies. Consented data is the documented production path |
 | Own Gmail as sender + `+alias` recipients (demo) | Custom domain | The brief allows it; zero cost; a Gmail filter handles spam placement. A domain with DKIM/SPF/DMARC is the documented production path |
 
 ---
@@ -625,4 +670,4 @@ The decision rests on measurements anyone can rerun (OPTIMIZATION §12).
 ## 14. 72-hour build scope (aligned to the brief; see REQUIREMENTS.md for the line-by-line mapping)
 | Required by the brief | Bonus the brief names (we do these) | Our additions that score on the rubric | Documented only (not built) |
 |---|---|---|---|
-| Event-driven scalable CSV ingest → RDS `users`; n8n in Docker; WF-A scheduled crawl → `loan_products`; WF-B webhook → fetch new users + all products → matching **in n8n** → `matches`; multi-stage Treasure Hunt; WF-C after WF-B → personalized email via **the n8n AWS SES node** to Gmail `+aliases`; minimal upload UI; `serverless.yml`; `docker-compose.yml`; workflow JSONs; README (diagram, setup incl. n8n credentials, design decisions); 5–10 min video; private repo + 4 collaborators | **Public AWS deployment** · **layout-change handling** in the crawler · API Gateway (optional; we use it for presign/status) | Multipart resumable upload · S3→SQS→Lambda + DLQ · outbox/sweeper/lease · class + bitset matching · LLM compile-once + projected cache + breaker · "new matches only" diff + no-duplicate emails · n8n Error workflow + node retries · status timeline in the UI · tests (differential, nasty CSVs, idempotency) · 1M-row load test | Custom sending domain (DKIM/SPF/DMARC), bounce/complaint pipeline, multi-tenancy, approval gate (toggle only), online offers API, XLSX + column mapping, queue-mode n8n, chunked ingest fan-out, WhatsApp |
+| Event-driven scalable CSV ingest → RDS `users`; n8n in Docker; WF-A scheduled crawl → `loan_products`; WF-B webhook → fetch new users + all products → matching **in n8n** → `matches`; multi-stage Treasure Hunt; WF-C after WF-B → personalized email via **the n8n AWS SES node** to Gmail `+aliases`; minimal upload UI; `serverless.yml`; `docker-compose.yml`; workflow JSONs; README (diagram, setup incl. n8n credentials, design decisions); 5–10 min video; private repo + 4 collaborators | **Public AWS deployment** · **layout-change handling** in the crawler · API Gateway (optional; we use it for presign/status) | Multipart resumable upload · S3→SQS→Lambda + DLQ · outbox/sweeper/lease · class + bitset matching · LLM compile-once + projected cache + breaker · "new matches only" diff + no-duplicate emails · n8n Error workflow + node retries · WF-D: ask ≤ 3 questions to confirm "to confirm" offers (§9.16) · status timeline in the UI · tests (differential, nasty CSVs, idempotency) · 1M-row load test | Custom sending domain (DKIM/SPF/DMARC), bounce/complaint pipeline, multi-tenancy, approval gate (toggle only), online offers API, XLSX + column mapping, queue-mode n8n, chunked ingest fan-out, WhatsApp |

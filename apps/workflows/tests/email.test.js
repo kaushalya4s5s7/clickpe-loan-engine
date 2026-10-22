@@ -77,3 +77,21 @@ test("LLM output parsing tolerates fences and drops unknown keys", () => {
   const out = parseJudgments(resp('{"judgments":[{"key":"k1","verdict":"PASS","reason":"ok"},{"key":"evil","verdict":"PASS"}]}'), pending, "m");
   assert.deepEqual(out, [{ cache_key: "k1", product_id: 1, verdict: "PASS", rationale: "ok", model: "m" }]);
 });
+
+test("question call-to-action: shown only with a link and something to unlock, honest copy", () => {
+  const base = { unsubscribeBase: "https://api/u", secret: "s".repeat(20), now: 1000 };
+  const confirm = { url: "https://hooks/webhook/confirm?t=c.a.1.b&x=<y>", questions: ["work_experience", "city"], unlockable: 3,
+                    lenders: ["HDFC Bank", "Axis Bank", "ICICI Bank", "SBI"] };
+  const e = renderEmail(user, { ...base, confirm });
+  assert.ok(e.html.includes("Answer 2 quick questions to confirm up to 3 offers from HDFC Bank, Axis Bank, ICICI Bank and 1 other"));
+  assert.ok(e.html.includes('href="https://hooks/webhook/confirm?t=c.a.1.b&amp;x=&lt;y&gt;"'), "link is attribute-escaped");
+  assert.ok(e.html.includes("self-declared") && e.html.includes("lender verifies"));
+  assert.ok(!/approved/i.test(e.html));
+  assert.ok(e.text.includes("Answer 2 quick questions to confirm up to 3 offers") && e.text.includes(confirm.url));
+  for (const c of [null, { ...confirm, url: null }, { ...confirm, questions: [] }, { ...confirm, unlockable: 0 }]) {
+    const plain = renderEmail(user, { ...base, confirm: c });
+    assert.ok(!plain.html.includes("quick question") && !plain.text.includes("quick question"));
+  }
+  assert.ok(renderEmail(user, { ...base, confirm: { ...confirm, questions: ["city"], unlockable: 1, lenders: ["HDFC Bank"] } })
+    .html.includes("Answer 1 quick question to confirm up to 1 offer from HDFC Bank"));
+});

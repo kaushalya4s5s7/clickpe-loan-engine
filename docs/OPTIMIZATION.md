@@ -230,6 +230,7 @@ Claim order `(tenant_last_served_at, created_at)` approximates **weighted fair q
 | Class assignment | `width_bucket` (binary search) + hash aggregate, in SQL | O(U log P) |
 | Per-attribute masks | Sort products by threshold → **prefix unions** (each value's mask = OR of products whose threshold ≤ value) | O(P) per attribute |
 | Class eligibility | `inc & score & age & emp` | O(C · P/64) |
+| Question plan (WF-D, console summary) | Per class: exhaustive search over ≤ 3 of ≤ 6 question ids, × class size | O(C · LIKELY per class) |
 | Ranking | **Class-level** (rank depends on product attributes such as rate) → top-K once per class, not per user | O(C · P log K) |
 | Expansion to users | One set-based SQL insert | O(matches) inside the DB |
 | **Product change** | New masks vs old: `gained = new & ~old` (bit ops) → only users in classes with gained bits get notified | O(C) instead of O(U) |
@@ -251,6 +252,7 @@ Claim order `(tenant_last_served_at, created_at)` approximates **weighted fair q
 | **Provider prompt caching** | Static system prompt + schema first, variable text last | Cheaper repeated prefixes where the provider supports it |
 | **Model tiering** | Small model first; escalate only if validation fails | Pays for capability only when needed |
 | **Circuit breaker** | Stop calling after N failures | No wasted calls during an outage |
+| **Ask for missing facts instead of judging them** (WF-D) | A rule about data we don't have is never sent to the LLM. After a user answers, only that user's LIKELY matches are re-checked | A few rules for one user per answer, not a batch re-run |
 
 ---
 
@@ -263,7 +265,7 @@ Claim order `(tenant_last_served_at, created_at)` approximates **weighted fair q
 | **Compression + keep-alive** | `Accept-Encoding: gzip, br`; reuse the connection per host | Fewer bytes, no repeated TLS handshakes |
 | **Politeness frontier** | Per-host queue with delay (honour `Crawl-delay`); hosts crawled **in parallel**, a single host **serially** | Fast overall, polite per site |
 | `robots.txt` cache | Fetched once per 24 h per host | Compliance without repeated fetches |
-| **Section hashing** | SHA-256 of the extracted loan section (not the whole page: ads and dates change daily) | Precise change detection |
+| **Section hashing** | SHA-256 of the extracted loan section (not the whole page: ads and dates change daily), **prefixed with the prompt version** | Precise change detection; a new extraction prompt re-reads every page once (a 304 still short-circuits, see ISSUES §5) |
 | **Adaptive revisit** (inside the daily schedule) | A page unchanged k times is deep-processed every 2^k days (capped at 7); reset on change | Change-rate-aware crawling; the daily trigger stays as the brief requires |
 | **Extraction ladder** | JSON-LD → CSS selectors → LLM fallback (layout-change bonus) | Cheapest reliable method first |
 | **Per-host circuit breaker** | Repeated 429/5xx → skip that host this run | Don't hammer a struggling site |

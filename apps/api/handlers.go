@@ -122,7 +122,12 @@ func (a *App) batchStatus(ctx context.Context, req request) (response, error) {
 		return response{}, err
 	}
 	summary, err := reporting.GetBatchSummary(ctx, a.DB, id)
-	return ok(http.StatusOK, map[string]any{"batch": b, "timeline": timeline, "errors_preview": preview, "summary": summary}), err
+	if err != nil {
+		return response{}, err
+	}
+	confirmations, err := reporting.GetBatchConfirmations(ctx, a.DB, id)
+	return ok(http.StatusOK, map[string]any{"batch": b, "timeline": timeline, "errors_preview": preview, "summary": summary,
+		"confirmations": confirmations}), err
 }
 
 func (a *App) errorsCSV(ctx context.Context, req request) (response, error) {

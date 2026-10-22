@@ -9,3 +9,6 @@
 .bar { height: 6px; border-radius: 999px; background: var(--surface-2); overflow: hidden; margin-top: 6px; min-width: 80px; }
 .bar span { display: block; height: 100%; background: var(--accent); }
 .emails { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.subhead { font-size: 13px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.confirmations { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+@media (max-width: 640px) { .confirmations { grid-template-columns: repeat(2, 1fr); } }

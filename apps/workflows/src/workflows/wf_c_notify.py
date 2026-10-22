@@ -19,17 +19,24 @@ def build() -> dict:
         "String($env.MAX_EMAILS_PER_RUN ?? '5')] }}"))
     w.postgres("Load pending", "c_load_pending", (660, 100),
                params_expr="={{ [$('Claim batch').first().json.batch_id] }}", alwaysOutputData=True)
-    w.code("Render emails", include("email") + """
+    w.code("Render emails", include("email") + include("questions") + """
 // One personalised email per pending notification (HTML-escaped, Indian number format, the
 // user's own numbers held against each lender's rules, unverifiable conditions shown honestly).
+// If a few self-declared answers could turn "to confirm" offers into pre-qualified ones, the email
+// links to Workflow D's form with the questions chosen to unlock the most worthwhile offers.
 const now = Math.floor(Date.now() / 1000);
 const opts = { unsubscribeBase: $env.UNSUBSCRIBE_BASE_URL, secret: $env.UNSUBSCRIBE_SECRET, now, maxCards: 5 };
 const out = [];
 for (const item of $input.all()) {
   const n = item.json;
   if (!n.notification_id || !Array.isArray(n.products) || !n.products.length) continue;
-  const { subject, html, text } = email.renderEmail(n, opts);
-  out.push({ json: { notification_id: n.notification_id, recipient: n.recipient, subject, html, text, send: true } });
+  const productsById = Object.fromEntries(n.products.map((p) => [p.product_id, p]));
+  const plan = questions.planQuestions(n, n.products, productsById, { maxQuestions: 3, maxCards: opts.maxCards });
+  const url = plan.questions.length ? questions.confirmLink($env.WEBHOOK_URL, n.user_id, $env.UNSUBSCRIBE_SECRET, now) : null;
+  const confirm = url ? { url, questions: plan.questions, unlockable: plan.unlockable, lenders: plan.lenders } : null;
+  const { subject, html, text } = email.renderEmail(n, { ...opts, confirm });
+  out.push({ json: { notification_id: n.notification_id, recipient: n.recipient, subject, html, text, send: true,
+                     questions: confirm ? plan.questions : null } });
 }
 // Always emit something so the workflow can close the batch even when nobody needs an email.
 return out.length ? out : [{ json: { send: false } }];
@@ -51,7 +58,8 @@ return out.length ? out : [{ json: { send: false } }];
         retryOnFail=True, maxTries=3, waitBetweenTries=2000, onError="continueErrorOutput")
     w.postgres("Mark sent", "c_mark_sent", (1760, -140), alwaysOutputData=True, params_expr=(
         "={{ [String($('Loop one at a time').item.json.notification_id), "
-        "String($json.SendEmailResponse?.SendEmailResult?.MessageId ?? $json.MessageId ?? ('unknown:' + Object.keys($json).join('|')))] }}"))
+        "String($json.SendEmailResponse?.SendEmailResult?.MessageId ?? $json.MessageId ?? ('unknown:' + Object.keys($json).join('|'))), "
+        "$('Loop one at a time').item.json.questions ? JSON.stringify($('Loop one at a time').item.json.questions) : ''] }}"))
     w.postgres("Mark failed", "c_mark_failed", (1760, 40), alwaysOutputData=True, params_expr=(
         "={{ [String($('Loop one at a time').item.json.notification_id), "
         "String($json.error?.message ?? $json.error ?? 'SES error')] }}"))

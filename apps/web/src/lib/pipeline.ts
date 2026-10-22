@@ -1,6 +1,7 @@
 // What a batch status means for the person looking at it. Pure: unit-tested, no React.
 
-import type { BatchStatus, MatchFunnel, PipelineEvent } from "./api/types.ts";
+import { num } from "./format.ts";
+import type { BatchStatus, MatchFunnel, PipelineEvent, QuestionPlan } from "./api/types.ts";
 
 export type StepState = "done" | "active" | "failed" | "todo";
 
@@ -60,6 +61,27 @@ export const STATUS_LABEL: Record<BatchStatus, string> = {
 export function funnelOf(timeline: PipelineEvent[]): MatchFunnel | null {
   const event = [...timeline].reverse().find((e) => e.stage === "match" && e.status === "completed");
   return event ? (event.detail as unknown as MatchFunnel) : null;
+}
+
+/** "Matches" splits into eligible now and to confirm (a lender condition our data can't answer). */
+export function matchesNote(funnel: Pick<MatchFunnel, "matches" | "likely">): string {
+  const likely = funnel.likely ?? 0;
+  return `${num(Math.max(0, funnel.matches - likely))} eligible · ${num(likely)} to confirm`;
+}
+
+/**
+ * The question plan, if the match event carried a usable one. The event detail is free-form JSON,
+ * so anything malformed is treated as absent; questions are ordered by offers they can unlock.
+ */
+export function questionPlanOf(funnel: MatchFunnel | null): QuestionPlan | null {
+  const plan = funnel?.question_plan as Partial<QuestionPlan> | undefined | null;
+  if (!plan || typeof plan !== "object" || !Array.isArray(plan.by_question)) return null;
+  const count = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : 0);
+  const byQuestion = plan.by_question
+    .filter((q) => q && typeof q === "object" && typeof q.id === "string")
+    .map((q) => ({ id: q.id, label: typeof q.label === "string" && q.label ? q.label : q.id, users: count(q.users), unlockable: count(q.unlockable) }))
+    .sort((a, b) => b.unlockable - a.unlockable || b.users - a.users);
+  return { users_to_ask: count(plan.users_to_ask), unlockable_matches: count(plan.unlockable_matches), by_question: byQuestion };
 }
 
 const EVENT_LABEL: Record<string, string> = {

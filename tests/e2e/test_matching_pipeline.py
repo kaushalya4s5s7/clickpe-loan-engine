@@ -60,6 +60,15 @@ def test_optimised_pipeline_equals_brute_force_on_sample_file(db, workflow_b, go
     likely = db.execute("SELECT count(*) FROM matches WHERE status = 'LIKELY' AND jsonb_array_length(unverified) > 0").fetchone()[0]
     assert likely == funnel["likely"] > 0
 
+    # Every LIKELY match here is blocked by one askable fact → the plan can unlock all of them.
+    plan = db.execute("SELECT detail->'question_plan' FROM pipeline_events"
+                      " WHERE batch_id = %s AND stage = 'match' AND status = 'completed'", (batch_id,)).fetchone()[0]
+    assert plan == funnel["question_plan"]
+    assert {q["id"] for q in plan["by_question"]} == {"business_vintage", "bank_accounts"}
+    assert plan["unlockable_matches"] == likely
+    likely_users = db.execute("SELECT count(DISTINCT user_id) FROM matches WHERE status = 'LIKELY'").fetchone()[0]
+    assert plan["users_to_ask"] <= likely_users
+
 
 def test_rematching_is_idempotent_and_keeps_notified_flags(db, workflow_b, go_ingest):
     _seed_products(db)

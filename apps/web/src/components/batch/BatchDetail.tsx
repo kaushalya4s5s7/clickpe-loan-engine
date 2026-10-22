@@ -1,19 +1,21 @@
 "use client";
 
 // One upload, end to end: pipeline progress, validation results, the matching funnel, matches per
-// lender product and the email outcome. Polls until the pipeline finishes.
+// lender product, the questions asked instead of guessing, and the email outcome. Polls until the
+// pipeline finishes.
 
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useApi } from "../ApiProvider";
 import { MatchFunnel } from "../MatchFunnel";
 import { PipelineStepper } from "../PipelineStepper";
+import { QuestionPlan } from "./QuestionPlan";
 import { EmptyState, ErrorNote, Icon, Skeleton, Stat, StatusPill } from "../ui";
 import styles from "./batch.module.css";
 import { usePolling } from "@/hooks/usePolling";
 import type { BatchView } from "@/lib/api/types.ts";
 import { bytes, num, percent, relativeTime } from "@/lib/format.ts";
-import { eventLabel, funnelOf, steps, TERMINAL } from "@/lib/pipeline.ts";
+import { eventLabel, funnelOf, questionPlanOf, steps, TERMINAL } from "@/lib/pipeline.ts";
 
 export function BatchDetail() {
   const id = useSearchParams()?.get("id") ?? null;
@@ -27,8 +29,9 @@ export function BatchDetail() {
     );
   }
 
-  const { batch, timeline, errors_preview: errors, summary } = data;
+  const { batch, timeline, errors_preview: errors, summary, confirmations } = data;
   const funnel = funnelOf(timeline);
+  const questionPlan = questionPlanOf(funnel);
   const finished = TERMINAL.has(batch.status);
 
   return (
@@ -113,6 +116,8 @@ export function BatchDetail() {
           <div className="card-pad"><MatchFunnel funnel={funnel} /></div>
         </section>
       )}
+
+      {questionPlan && <QuestionPlan plan={questionPlan} confirmations={confirmations} />}
 
       {summary.by_product.length > 0 && (
         <section className="card">

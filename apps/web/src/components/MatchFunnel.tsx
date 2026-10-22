@@ -3,6 +3,7 @@
 
 import type { MatchFunnel as Funnel } from "@/lib/api/types.ts";
 import { num } from "@/lib/format.ts";
+import { matchesNote } from "@/lib/pipeline.ts";
 import styles from "./MatchFunnel.module.css";
 
 const width = (value: number, max: number) => (value <= 0 ? 0 : Math.max(1.5, (100 * Math.log10(value + 1)) / Math.log10(max + 1)));
@@ -17,7 +18,7 @@ export function MatchFunnel({ funnel }: { funnel: Funnel }) {
     // llm_keys is measured after the AI answered (always 0 then); llm_new_judgments is what was actually asked.
     { name: "Questions sent to the AI", note: `answers reused for ${num(funnel.llm_cache_hits)} checks`,
       value: funnel.llm_new_judgments ?? funnel.llm_keys, kind: "ai" },
-    { name: "Matches", note: `${num(funnel.likely)} need a lender check`, value: funnel.matches, kind: "final" },
+    { name: "Matches", note: matchesNote(funnel), value: funnel.matches, kind: "final" },
   ];
   return (
     <div>

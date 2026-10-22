@@ -74,3 +74,26 @@ test("numberAppears handles Indian formats", () => {
   assert.ok(numberAppears(10000000, "loans up to 1 crore"));
   assert.ok(!numberAppears(30000, "₹25,000"));
 });
+
+test("soft rules keep applicant requirements and drop notes about the loan", () => {
+  const { isApplicantRule } = require("../src/code/crawl.js");
+  for (const keep of ["Should have completed minimum 2 years in employment",
+                      "You must already be an HSBC customer",
+                      "The applicant should be 80 years or younger at the end of the loan tenure.",
+                      "Employed with an MNC, public limited company, or private limited company"]) {
+    assert.ok(isApplicantRule(keep), keep);
+  }
+  for (const drop of ["The minimum amount of personal loan varies by location from Rs. 50,000 to Rs. 1 lakh.",
+                      "It varies by location from Rs. 2 lakhs to Rs. 20 lakhs.",
+                      "Insurance is mandatory under the scheme.",
+                      "Ownership of property affects eligibility calculation",
+                      "Only for indian resident customers",
+                      "You should have a steady income, meet minimum salary requirements",
+                      "Applicants with stable monthly income may qualify for faster approvals and attractive loan terms.",
+                      "A CIBIL score above 700 is ideal for Personal Loans."]) {
+    assert.ok(!isApplicantRule(drop), drop);
+  }
+  const page = "Maximum age of 60 years at the time of maturity of the Personal Loan";
+  assert.ok(isApplicantRule("Maximum age of 60 years at the time of maturity of the Personal Loan", page));
+  assert.ok(!isApplicantRule("Maximum age of 60 years at the time of maturity of животного Personal Loan", page));
+});

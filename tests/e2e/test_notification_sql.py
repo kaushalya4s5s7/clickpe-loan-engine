@@ -37,7 +37,10 @@ def test_no_duplicate_email_for_the_same_offer(db, sql, new_batch):
     sql("c_queue_notifications", batch_id, "true", ALIASES, "5")
     pending = sql("c_load_pending", batch_id)
     assert len(pending) == 1 and pending[0]["products"][0]["lender_name"] == "HDFC Bank"
-    sql("c_mark_sent", str(pending[0]["notification_id"]), "ses-123")
+    card = pending[0]["products"][0]  # what the question planner needs travels with each product
+    assert {"product_id", "status", "score", "unverified", "interest_rate_min", "lender_name", "soft_rules"} <= set(card)
+    sql("c_mark_sent", str(pending[0]["notification_id"]), "ses-123", "")
+    assert db.execute("SELECT questions FROM notifications").fetchone()[0] is None, "no question link → NULL"
     assert sql("c_queue_notifications", batch_id, "true", ALIASES, "5")[0]["queued"] == 0  # matches now notified
     db.execute("UPDATE matches SET notified_at = NULL")  # even if a flag were lost, the unique digest blocks it
     assert sql("c_queue_notifications", batch_id, "true", ALIASES, "5")[0]["queued"] == 0
@@ -63,3 +66,11 @@ def test_frequency_cap_blocks_a_second_email_within_7_days(db, sql, new_batch):
     db.execute("INSERT INTO notifications (user_id, digest_key, recipient, status, sent_at) VALUES ('U0','old','x','SENT', now())")
     assert sql("c_queue_notifications", batch_id, "true", ALIASES, "5")[0]["queued"] == 0
     assert json.loads(json.dumps(sql("c_load_pending", batch_id))) == []
+
+
+def test_mark_sent_records_the_questions_asked(db, sql, new_batch):
+    batch_id = _setup(db, new_batch, 1)
+    sql("c_queue_notifications", batch_id, "true", ALIASES, "5")
+    nid = str(sql("c_load_pending", batch_id)[0]["notification_id"])
+    sql("c_mark_sent", nid, "ses-1", json.dumps(["work_experience", "bank_accounts"]))
+    assert db.execute("SELECT status, questions FROM notifications").fetchone() == ("SENT", ["work_experience", "bank_accounts"])

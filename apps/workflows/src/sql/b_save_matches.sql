@@ -3,6 +3,8 @@
 -- n8n ships ~hundreds of class rows; Postgres expands them to tens of thousands of pairs
 -- (set-based, one round trip) instead of n8n sending one INSERT per pair.
 -- Existing pairs keep first_matched_at and notified_at, so nobody is emailed twice for the same offer.
+-- A pair the person already confirmed with their own answers (workflow D, decided_by DECLARED) keeps
+-- that status while it still passes the hard rules; a re-match must not send it back to LIKELY.
 -- $1 batch_id, $2 class rows JSON, $3/$4/$5 income/credit/age cuts, $6 funnel JSON
 WITH cls AS (
   SELECT * FROM jsonb_to_recordset($2::jsonb) AS c(
@@ -29,6 +31,7 @@ WITH cls AS (
   ON CONFLICT (user_id, product_id) DO UPDATE
      SET status = EXCLUDED.status, score = EXCLUDED.score, unverified = EXCLUDED.unverified,
          decided_by = EXCLUDED.decided_by, batch_id = EXCLUDED.batch_id
+   WHERE matches.decided_by <> 'DECLARED' OR EXCLUDED.status = 'ELIGIBLE'
   RETURNING (xmax = 0) AS is_new
 ), counts AS (
   SELECT count(*) AS matches, count(*) FILTER (WHERE is_new) AS new_matches,

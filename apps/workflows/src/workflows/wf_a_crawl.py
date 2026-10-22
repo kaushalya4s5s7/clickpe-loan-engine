@@ -33,9 +33,10 @@ def build() -> dict:
             "response": {"response": {"fullResponse": True, "neverError": True, "responseFormat": "text"}},
             "batching": {"batch": {"batchSize": 1, "batchInterval": 1000}}}},  # politeness: 1 request/second
         (440, 100), retryOnFail=True, maxTries=2, waitBetweenTries=5000, onError="continueRegularOutput")
-    w.code("Extract section", include("crawl") + """
+    w.code("Extract section", include("crawl") + include("llm") + """
 // Per page: 304 → not_modified; otherwise visible text → keyword windows → hash.
 // The hash covers ONLY the eligibility text, so ads, dates and menus changing don't trigger the LLM.
+// The prompt version is part of it, so a better extraction prompt re-reads every page once.
 const sources = $('Load sources').all();
 return $input.all().map((item, i) => {
   const src = sources[i].json;
@@ -50,7 +51,7 @@ return $input.all().map((item, i) => {
     return { json: { ...base, outcome: "failed", error: `HTTP ${status || "error"}: ${String(r.error?.message ?? "").slice(0, 200)}`, bytes: 0 } };
   }
   const section = crawl.relevantSection(crawl.htmlToText(body));
-  const hash = crawl.sha256(section);
+  const hash = crawl.sha256(`${llm.PROMPT_VERSION}\n${section}`);
   return { json: { ...base, outcome: hash === src.section_hash ? "unchanged" : "changed", section, section_hash: hash,
                    bytes: body.length } };
 });

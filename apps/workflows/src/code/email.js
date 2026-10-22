@@ -50,7 +50,8 @@ const firstName = (name) => String(name ?? "").trim().split(/\s+/)[0] || "there"
 
 /**
  * @param n  {user_id, name, monthly_income, credit_score, employment_status, age, products:[...]}
- * @param o  {unsubscribeBase, secret, now (seconds), maxCards}
+ * @param o  {unsubscribeBase, secret, now (seconds), maxCards,
+ *            confirm?: {url, questions:[id], unlockable, lenders:[name]}  (questions.planQuestions + signed link)}
  */
 /**
  * Pick cards across lenders: each lender's best product first (in score order), then second-best, ...
@@ -66,6 +67,24 @@ function pickCards(products, max) {
   return out;
 }
 
+/** "A", "A and B", "A, B, C and 2 others" */
+function listLenders(names, max = 3) {
+  const shown = names.slice(0, max), rest = names.length - shown.length;
+  if (rest > 0) return `${shown.join(", ")} and ${rest} other${rest === 1 ? "" : "s"}`;
+  return shown.length > 1 ? `${shown.slice(0, -1).join(", ")} and ${shown[shown.length - 1]}` : (shown[0] ?? "");
+}
+
+/** The "answer a few questions" call to action, or null. Answers are self-declared: say so. */
+function confirmPrompt(c) {
+  if (!c || !c.url || !Array.isArray(c.questions) || !c.questions.length || !(c.unlockable > 0)) return null;
+  const q = c.questions.length, m = c.unlockable;
+  return {
+    headline: `Answer ${q} quick question${q === 1 ? "" : "s"} to confirm up to ${m} offer${m === 1 ? "" : "s"}${c.lenders?.length ? ` from ${listLenders(c.lenders)}` : ""}`,
+    note: "Some lenders ask for details we don't have yet. Tell us and we'll re-check — it takes under a minute. Your answers are self-declared: the lender verifies them when you apply.",
+    url: c.url,
+  };
+}
+
 function renderEmail(n, o) {
   const products = pickCards(n.products || [], o.maxCards ?? 5);
   const more = (n.products || []).length - products.length;
@@ -75,6 +94,7 @@ function renderEmail(n, o) {
   const unsubscribeUrl = `${o.unsubscribeBase}?t=${encodeURIComponent(token)}`;
   const count = (n.products || []).length;
   const subject = `${name}, ${count} personal loan${count === 1 ? "" : "s"} you may qualify for`;
+  const ask = confirmPrompt(o.confirm);
 
   const cards = products.map((p) => {
     const why = reasons(n, p).map((r) => `<li>${escapeHtml(r)}</li>`).join("");
@@ -95,6 +115,11 @@ ${todo ? `<div style="margin-top:10px;font-size:14px;color:#a16207;font-weight:6
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td align="center" style="padding:24px 12px">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:560px">
 <tr><td style="padding:0 4px 16px;font-size:16px;color:#18181b">Hi ${escapeHtml(name)},<br><br>Based on the details shared with us, you may be eligible for these personal loans:</td></tr>
+${ask ? `<tr><td style="padding:16px;border:1px solid #fde68a;border-radius:12px;background:#fffbeb">
+<div style="font-size:16px;font-weight:700;color:#18181b">${escapeHtml(ask.headline)}</div>
+<div style="margin-top:6px;font-size:14px;line-height:1.5;color:#3f3f46">${escapeHtml(ask.note)}</div>
+<div style="margin-top:12px"><a href="${escapeHtml(ask.url)}" style="display:inline-block;background:#a16207;color:#ffffff;text-decoration:none;padding:10px 16px;border-radius:8px;font-size:14px;font-weight:600">Answer the questions</a></div>
+</td></tr><tr><td style="height:12px"></td></tr>` : ""}
 ${cards}
 ${more > 0 ? `<tr><td style="padding:0 4px 12px;font-size:14px;color:#3f3f46">+ ${more} more option${more === 1 ? "" : "s"} matched your profile, across ${lenders} lender${lenders === 1 ? "" : "s"} in total.</td></tr>` : ""}
 <tr><td style="padding:8px 4px;font-size:12px;line-height:1.5;color:#71717a">These are indicative matches based on publicly listed criteria — not loan offers or approvals. Final eligibility, rates and amounts are decided by the lender.<br><br>
@@ -103,6 +128,7 @@ You're receiving this because you shared your details for loan offers. <a href="
 
   const text = [
     `Hi ${name},`, "", "Based on the details shared with us, you may be eligible for these personal loans:", "",
+    ...(ask ? [`${ask.headline}:`, ask.url, ask.note, ""] : []),
     ...products.flatMap((p) => [
       `• ${p.product_name} — ${p.lender_name}`, `  ${rateText(p)}`,
       ...reasons(n, p).map((r) => `  ✓ ${r}`), ...(p.unverified || []).map((u) => `  ? To confirm: ${u}`),
@@ -117,5 +143,5 @@ You're receiving this because you shared your details for loan offers. <a href="
 }
 
 if (typeof module !== "undefined") {
-  module.exports = { renderEmail, pickCards, unsubscribeToken, formatINR, escapeHtml, reasons };
+  module.exports = { renderEmail, pickCards, unsubscribeToken, formatINR, escapeHtml, reasons, listLenders, confirmPrompt };
 }

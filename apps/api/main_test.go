@@ -82,6 +82,9 @@ func TestUploadFlowThroughHandlers(t *testing.T) {
 	if code != 200 || st["batch"].(map[string]any)["status"] != "UPLOADED" || len(st["timeline"].([]any)) != 2 {
 		t.Fatal(code, st)
 	}
+	if c := st["confirmations"].(map[string]any); c["asked"] != 0.0 || c["answered"] != 0.0 || c["flagged"] != 0.0 || c["unlocked"] != 0.0 {
+		t.Fatal(c)
+	}
 	if code, list, _ := call(t, a, "GET", "/v1/batches", nil, map[string]string{"limit": "5"}, nil); code != 200 || len(list["batches"].([]any)) != 1 {
 		t.Fatal(code, list)
 	}

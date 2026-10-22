@@ -35,6 +35,7 @@ flowchart TB
     T_MATCH[("matches<br/>user ↔ loan")]
     T_NOTIF[("notifications<br/>who was emailed")]
     T_EVENTS[("pipeline_events<br/>timeline + errors")]
+    T_DECL[("user_declarations<br/>self-declared answers")]
   end
 
   %% ================= N8N =================
@@ -54,11 +55,17 @@ flowchart TB
     subgraph WFC["Workflow C · NOTIFY"]
       C0["▶️ Trigger: started by B"]
       C1["17 · Claim: MATCHED → NOTIFYING<br/>pick users: consented, not emailed in 7 days<br/>TEST MODE → send to our own Gmail only"]
-      C2["18 · Loop: one email at a time<br/>send via AWS SES → mark SENT or FAILED<br/>wait 1 second, next"]
+      C2["18 · Loop: one email at a time<br/>adds a signed link with ≤ 3 questions if they'd unlock offers<br/>send via AWS SES → mark SENT or FAILED<br/>wait 1 second, next"]
       C3["19 · Finish: NOTIFYING → DONE ✅"]
     end
+    subgraph WFD["Workflow D · CONFIRM — started by the user"]
+      D1["20 · GET webhook/confirm?t=…<br/>check the signed link<br/>show only this person's questions"]
+      D2["21 · POST webhook/confirm-submit<br/>sanity checks → save answers<br/>contradiction? flag for ops, don't use"]
+      D3["22 · Re-check only this person's<br/>'to confirm' matches (same LLM judge)<br/>unlocked → pre-qualified (self-declared)"]
+      D4["23 · Email the unlocked loans"]
+    end
     subgraph WFE["Workflow E · ERRORS"]
-      E1["💥 Trigger: A, B or C crashed<br/>write the crash into pipeline_events"]
+      E1["💥 Trigger: A, B, C or D crashed<br/>write the crash into pipeline_events"]
     end
   end
 
@@ -101,6 +108,15 @@ flowchart TB
   C2 --> SES --> INBOX
   C3 --> T_BATCH
 
+  %% ---------- confirm (user-started) ----------
+  INBOX ==>|"user clicks the link in the email<br/>opens the form in a browser"| D1
+  D1 --> D2 --> D3 --> D4
+  D2 --> T_DECL
+  T_MATCH -.->|"this person's LIKELY matches"| D3
+  D3 --> T_MATCH
+  D3 <--> LLM
+  D4 --> SES
+
   %% ---------- crawler (independent) ----------
   A1 --> A2
   A2 <--> BANKS
@@ -108,7 +124,7 @@ flowchart TB
   A2 --> T_PROD
 
   %% ---------- errors + status polling ----------
-  WFA & WFB & WFC -.->|"on crash"| E1
+  WFA & WFB & WFC & WFD -.->|"on crash"| E1
   E1 --> T_EVENTS
   U99 -->|"GET status"| STATUS
   STATUS -.-> T_BATCH
@@ -120,8 +136,8 @@ flowchart TB
   classDef ext fill:#f3f4f6,stroke:#6b7280,color:#111
   class U1,U5,U7,U99 browser
   class API2,API4,API8,ING10,ING11,ING12,STATUS go
-  class T_BATCH,T_USERS,T_PROD,T_MATCH,T_NOTIF,T_EVENTS db
-  class A1,A2,B0a,B0b,B1,B2,B3,B4,C0,C1,C2,C3,E1 n8n
+  class T_BATCH,T_USERS,T_PROD,T_MATCH,T_NOTIF,T_EVENTS,T_DECL db
+  class A1,A2,B0a,B0b,B1,B2,B3,B4,C0,C1,C2,C3,D1,D2,D3,D4,E1 n8n
   class S3,SQS,LLM,SES,INBOX,BANKS ext
 ```
 
@@ -135,6 +151,19 @@ CREATED ─► UPLOADED ─► PARSING ─► LOADED ─► MATCHING ─► MATC
                                 (anything can end in FAILED; the user can cancel → ABORTED)
 ```
 
+Workflow D is not on this line. It starts later, whenever a user clicks the link in their email, and works on one person at a time.
+
+## After the email: asking instead of guessing (Workflow D)
+
+Some offers are "to confirm": a lender rule needs a fact the CSV doesn't have (work experience, employer type, a bank account with that lender, city, business age, existing EMIs).
+
+**Before the email (step 18).** When Workflow C writes the email, a planner picks **at most 3 questions for that person**: the ones that unlock the most worthwhile offers. Questions are per fact, so one answer can unlock several lenders. The email carries a signed link to them. No extra email is sent just to ask. Workflow B also records a per-profile summary ("how many people to ask, how many matches could unlock") for the console.
+
+20. The user clicks it. `GET webhook/confirm?t=…` checks the signature and expiry (14 days) and shows a form with only that person's questions. A bad or old link shows "this link has expired".
+21. The user submits. `POST webhook/confirm-submit` checks the token again, runs sanity checks, and saves the answers in `user_declarations`. Contradictory answers are flagged for ops and not used.
+22. Only that person's "to confirm" matches are re-checked, with the same rule and LLM-judge path as Workflow B. Unlocked ones become **pre-qualified (self-declared)** (`decided_by = DECLARED`).
+23. One email lists the unlocked loans. It goes to the same address Workflow C used. It never says "approved": the lender still checks documents.
+
 ## Who owns what
 
 | Part | Owner | Why it lives there |
@@ -145,5 +174,6 @@ CREATED ─► UPLOADED ─► PARSING ─► LOADED ─► MATCHING ─► MATC
 | Reading bank websites | n8n workflow A | The brief asks for n8n; it runs on a schedule |
 | Matching users to loans | n8n workflow B | The brief asks for n8n; SQL + JS + LLM steps |
 | Emails | n8n workflow C → AWS SES | The brief asks for n8n's SES node |
+| Asking for missing facts | n8n workflow D (two webhooks) | Same SQL, judge and SES node as B and C; one person at a time |
 | Recording crashes | n8n workflow E | Built-in n8n "error workflow" feature |
 | The handover between all of them | Postgres (`status` column) + the doorbell | Each side can crash without losing work |

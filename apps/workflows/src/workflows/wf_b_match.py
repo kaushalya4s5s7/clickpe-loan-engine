@@ -102,7 +102,7 @@ return [{ json: { judgments: out, llm_calls: batches.length, llm_tokens: tokens 
 """, (2660, 0))
     w.postgres("Save judgments", "b_save_judgments", (2880, 0),
                params_expr="={{ [JSON.stringify($json.judgments)] }}", alwaysOutputData=True)
-    w.code("Final match", include("matcher") + """
+    w.code("Final match", include("matcher") + include("questions") + """
 // Re-run the (millisecond) bitset pass with every verdict known, then hand Postgres one row per
 // (class, product); it expands classes back to users in a single set-based statement.
 const plan = $('Plan classes').first().json;
@@ -111,9 +111,13 @@ let fresh = { judgments: [], llm_calls: 0, llm_tokens: 0 };
 try { fresh = $('Parse judgments').first().json; } catch (e) { /* LLM branch not taken */ }
 const judgments = { ...gate.cached };
 for (const j of fresh.judgments) judgments[j.cache_key] = j.verdict;
-const result = matcher.matchClasses($('Load user classes').first().json.classes || [], plan.products, plan.cuts, judgments);
+const classes = $('Load user classes').first().json.classes || [];
+const result = matcher.matchClasses(classes, plan.products, plan.cuts, judgments);
+// What Workflow C's "answer a few questions" link could unlock — planned per class, not per user.
+const productsById = Object.fromEntries(plan.products.map((p) => [p.id, p]));
+const question_plan = questions.planForClasses(result.rows, productsById, { classes, maxQuestions: 3, maxCards: 5 });
 const funnel = { ...result.funnel, llm_calls: fresh.llm_calls, llm_tokens: fresh.llm_tokens,
-                 llm_new_judgments: fresh.judgments.length, llm_skipped: gate.skipped_llm };
+                 llm_new_judgments: fresh.judgments.length, llm_skipped: gate.skipped_llm, question_plan };
 return [{ json: { batch_id: plan.batch_id, rows: result.rows, funnel } }];
 """, (3100, 100))
     w.postgres("Save matches", "b_save_matches", (3320, 100), params_expr=(

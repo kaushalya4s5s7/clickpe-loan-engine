@@ -15,7 +15,7 @@ Upload a CSV of users → the system discovers personal-loan products on lender 
 |---|---|
 | **`serverless.yml`** deploying all AWS resources | [`serverless.yml`](serverless.yml): API Gateway, 3 Go Lambdas, S3, SQS + DLQ, RDS PostgreSQL, IAM, SES sender user |
 | **`docker-compose.yml`** for self-hosted n8n | [`docker-compose.yml`](docker-compose.yml): n8n + Postgres, optional ngrok / Cloudflare tunnel |
-| **JSON file for each n8n workflow** | [`apps/workflows/dist/`](apps/workflows/dist): `A_crawl.json`, `B_match.json`, `C_notify.json`, `E_errors.json` |
+| **JSON file for each n8n workflow** | [`apps/workflows/dist/`](apps/workflows/dist): `A_crawl.json`, `B_match.json`, `C_notify.json`, `D_confirm.json`, `E_errors.json` |
 | **Architecture diagram** | [Architecture](#architecture) below (more detail: [SYSTEM-FLOW](docs/SYSTEM-FLOW.md)) |
 | **Setup & deployment**, including **n8n credentials (AWS, database)** | [Setup](#setup), the credentials table in step 1 |
 | **Design decisions**: workflow design, **web crawling strategy**, **Optimization Treasure Hunt** | [Workflow design](#workflow-design) · [Web crawling strategy](#web-crawling-strategy) · [Treasure Hunt](#the-optimisation-treasure-hunt-workflow-b) · [Decisions table](#design-decisions-and-what-we-rejected) |
@@ -34,6 +34,7 @@ Upload a CSV of users → the system discovers personal-loan products on lender 
 4. **Match (Workflow B).** It claims the batch (compare-and-set + lease), then runs the multi-stage Treasure Hunt below and writes `matches`.
 5. **Notify (Workflow C).** It queues one notification per user with *new* matches and renders a personalised email. It sends through the **n8n AWS SES node** at 1 msg/s and records SENT/FAILED, so a duplicate send can't happen.
 6. **Discover (Workflow A).** Runs daily: conditional GET → keyword-windowed text → hash. The LLM is called only when a lender's eligibility text actually changed. Every extracted number must be backed by a verbatim quote from the page.
+7. **Confirm (Workflow D).** If a "to confirm" offer could be unlocked by a fact we don't have, the email carries a signed link to a short form (at most 3 questions). The user's browser opens `GET webhook/confirm?t=…` and posts the answers to `webhook/confirm-submit`. D re-checks only that person's "to confirm" matches and emails the ones that now pre-qualify. See [Stage 5](#stage-5-ask-dont-guess-workflow-d).
 
 **The console** (`apps/web`, Next.js static export hosted on AWS Amplify):
 - **Overview:** what the engine does, how it works, live numbers.
@@ -46,13 +47,14 @@ Upload a CSV of users → the system discovers personal-loan products on lender 
 
 ## Workflow design
 
-Four n8n workflows, each with one job. They hand work to each other through the batch status in Postgres, so any step can crash and be safely re-run.
+Five n8n workflows, each with one job. They hand work to each other through the batch status in Postgres, so any step can crash and be safely re-run.
 
 | Workflow | Starts when | Does | Robustness built in |
 |---|---|---|---|
 | **A · Discover loan products** | Daily 02:00 IST, or *Run now* | Crawls 15 lender pages, extracts eligibility rules with an LLM, upserts `loan_products` | Skips unchanged pages; keeps yesterday's data if extraction fails; retries 3× |
 | **B · Match users to loans** | Signed webhook from the ingest Lambda, **or** a 2-minute sweeper | Claims the batch, runs the Treasure Hunt, writes `matches`, calls C | HMAC + timestamp check; compare-and-set claim + 15-min lease, so two runs can't both match |
-| **C · Notify matched users** | Called by B (Execute Workflow) | Queues one email per user, renders it, sends via the **AWS SES node** at 1/s | Unique index makes a duplicate email impossible; failures go out the error output, retried, then FAILED |
+| **C · Notify matched users** | Called by B (Execute Workflow) | Queues one email per user, renders it (with a link to ≤ 3 questions when answers could unlock offers), sends via the **AWS SES node** at 1/s | Unique index makes a duplicate email impossible; failures go out the error output, retried, then FAILED |
+| **D · Confirm missing facts** | The user opens the signed link in C's email, then submits the form | Shows only that person's planned questions, stores the answers, re-checks their LIKELY matches, emails what is now pre-qualified | Signed, expiring token (no PII in the link); sanity checks before anything is used; contradictions flagged for ops, not used; email goes to the address C already used |
 | **E · Error handler** | Any of A/B/C fails | Writes the failure to `pipeline_events`, shown in the console timeline | Every workflow points at it |
 
 Native nodes carry the visible process (Webhook, Schedule, Postgres, IF, Merge, Loop Over Items, Wait, AWS SES, Execute Workflow). Algorithms (bitset matching, HMAC check, HTML parsing) live in Code nodes whose source is in `apps/workflows/src/code/*.js`, unit-tested with `node --test`.
@@ -86,6 +88,22 @@ Evaluating every user × product pair with an LLM is slow and expensive. Instead
   - Classes are approximations only for the LLM. The LLM sees a value *range*, never a person, so it answers UNKNOWN when the range straddles a rule, and the match stays LIKELY.
   - LLM verdicts are cached forever per criteria version. A product change creates a new `criteria_hash` and so fresh questions.
 
+### Stage 5: ask, don't guess (Workflow D)
+
+After stage 4, most leftover work is "to confirm" matches: a lender rule depends on something the CSV doesn't have. On `users.csv` that is **56,963 LIKELY matches**, but they are blocked by only about **5 unknown facts**: work experience, bank relationship, employer type, city and business vintage (plus one Bank of Baroda rule about being able to repay the EMI). So instead of guessing, we ask the person.
+
+| Step | What it does |
+|---|---|
+| **Plan** (`apps/workflows/src/code/questions.js`) | Questions are **per fact, not per lender**: one "how long have you been working?" answers HDFC, ICICI and Kotak at once. A match is only worth asking about if unlocking it would put it in the person's top 5 offers. Pick the **≤ 3 questions** that unlock the most matches. B records a per-profile (class) summary for the console, like stage 1, so that cost doesn't grow with users |
+| **Ask** (C) | The planner runs for each person being emailed. The weekly email gets a signed link (expires in 14 days) to their questions. No new email is sent just to ask |
+| **Answer** (D) | Form → sanity checks → answers saved as **self-declared** → re-check only that person's LIKELY matches, using the same rule and LLM-judge path as B → unlocked matches become *pre-qualified (self-declared)* → one email listing them |
+
+- **Measured on `users.csv`:** asking the 10,000 people at most 3 questions each could confirm up to **28,381 of the 56,963** "to confirm" offers. Work experience alone covers 18,681. Live test: one person answered 3 questions, and HDFC, ICICI, Poonawalla and Bank of Baroda moved to pre-qualified.
+- **Answers survive a re-match.** If B re-matches the batch, a match confirmed by the person's answers stays confirmed while it still passes the hard rules.
+- **Self-declared, never "approved".** The lender still verifies documents at application. Contradictory answers are flagged for ops (counted in the batch status API) and not used.
+- **No new settings.** The link is built from `N8N_PUBLIC_URL` (n8n's `WEBHOOK_URL`) and signed with `UNSUBSCRIBE_SECRET` (a `c.` prefix keeps the two token kinds apart). For links that work outside your machine, `N8N_PUBLIC_URL` must be the tunnel URL.
+- **Production path:** replace self-declaration with consented data: Account Aggregator bank statements (income, salary account, EMIs), a bureau soft pull, EPFO (work history).
+
 ---
 
 ## Repository layout
@@ -98,7 +116,7 @@ tests/     architecture (import-boundary rules) · e2e (SQL + JS chains) · orac
 
 - Each Go package exposes a small public API; vendor code (the AWS SDK) sits in its `internal/` folder, which **the Go compiler** forbids anyone else to import. `internal/archtest` enforces the rest (dependency table, driver never in apps, env reads only in `keys.go`).
 - n8n Code-node logic lives in `apps/workflows/src/code/*.js` and every query in `src/sql/*.sql`, both tested.
-- `python apps/workflows/build.py` assembles them into `apps/workflows/dist/*.json`. Don't edit `dist/` by hand.
+- `python apps/workflows/build.py` assembles them into `apps/workflows/dist/*.json` (`A_crawl`, `B_match`, `C_notify`, `D_confirm`, `E_errors`). Don't edit `dist/` by hand.
 - Details: [REPO-ARCHITECTURE](docs/REPO-ARCHITECTURE.md).
 
 ---
@@ -127,7 +145,7 @@ On start, the n8n container ([`apps/workflows/docker/init.sh`](apps/workflows/do
    | **Loan DB** | Postgres | `APP_DATABASE_URL` (host, port, db, user, password; SSL "require" when `sslmode=require`) |
    | **AWS SES** | AWS | `SES_REGION`, `SES_ACCESS_KEY_ID`, `SES_SECRET_ACCESS_KEY` (the send-only IAM user) |
    | **LLM API** | Header Auth | `Authorization: Bearer $LLM_API_KEY` |
-2. **Imports workflows A, B, C and the error workflow.**
+2. **Imports workflows A, B, C, D and the error workflow.**
 3. **Publishes them.**
 
 To set credentials **manually** instead, open n8n → *Credentials* → edit **Loan DB / AWS SES / LLM API** with the values above. The workflows reference credentials by these names.
@@ -209,6 +227,7 @@ CI (`.github/workflows/ci.yml`) runs all of the above on every push and PR again
 | **Classes + bitsets + selective LLM** | LLM or loops per user × product | See the Treasure Hunt. Proven equal to brute force by tests |
 | **LLM compiles page text into rules once a day; never judges a person** | LLM per user | Cost stays flat as users grow. No PII ever reaches the LLM |
 | **Text windowing + verbatim-evidence validation** in the crawler | CSS selectors | A redesign doesn't break extraction (layout-change handling, a brief bonus). Hallucinated or injected numbers are dropped. An empty extraction keeps yesterday's data |
+| **Ask the user 1–3 questions, chosen per fact** (Workflow D) | Leave "to confirm" forever; ask about every unverified rule; one question per lender | ~57k LIKELY matches collapse to ~5 unknown facts. Only questions that unlock a top-5 offer are asked. Answers are self-declared and labelled so; the lender verifies documents |
 | **`UNIQUE(user_id, digest_key)` + `notified_at`** | "Remember not to resend" | Duplicate emails are impossible at the database level. A failed send retries up to 3×, then it's marked FAILED |
 | **API Gateway REST (API key, usage plan)** | HTTP API | Quotas and throttling per client; HTTP APIs have no usage plans |
 | **Next.js static export on AWS Amplify** (CloudFront optional) | Next.js server (SSR) on Lambda; Vercel | The console only calls our API from the browser, so a server would add cost and patching for nothing. Amplify gives HTTPS and a short URL; `cdn=true` switches on CloudFront once the account is verified |
@@ -220,5 +239,7 @@ Known limitations (intentionally out of scope):
 - The SES node sends HTML only. There's no `List-Unsubscribe` header, because the n8n SES node can't set custom headers. The email body has a signed unsubscribe link instead.
 - Bounce/complaint webhooks aren't wired.
 - One batch is matched per sweeper tick.
+- Confirmation answers are self-declared. We run sanity checks and flag contradictions, but we can't verify them. Production would use consented data (Account Aggregator, bureau soft pull, EPFO).
+- A rule about something we can't ask in a simple form (category "other", apart from EMI affordability) stays "to confirm".
 
 Full analysis: [DESIGN §13–14](docs/DESIGN.md).

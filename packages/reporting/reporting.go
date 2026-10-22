@@ -121,3 +121,24 @@ func GetBatchSummary(ctx context.Context, q database.Querier, batchID string) (B
 	}
 	return s, err
 }
+
+// Confirmations is how the "to confirm" questions went for one upload (workflow D). Answers are
+// self-declared: "unlocked" means pre-qualified on the person's word, the lender still verifies.
+type Confirmations struct {
+	Asked    int64 `json:"asked"`    // sent emails that carried a question link
+	Answered int64 `json:"answered"` // people who submitted answers
+	Flagged  int64 `json:"flagged"`  // contradictory answers held for ops review, not used
+	Unlocked int64 `json:"unlocked"` // matches that moved from LIKELY to ELIGIBLE on those answers
+}
+
+// GetBatchConfirmations is one round trip, scoped to the batch like GetBatchSummary.
+func GetBatchConfirmations(ctx context.Context, q database.Querier, batchID string) (Confirmations, error) {
+	var c Confirmations
+	err := q.QueryRow(ctx, `SELECT
+		(SELECT count(*) FROM notifications WHERE batch_id = $1::uuid AND status = 'SENT' AND questions IS NOT NULL),
+		d.answered, d.flagged, d.unlocked
+		FROM (SELECT count(*) AS answered, count(*) FILTER (WHERE flagged) AS flagged, coalesce(sum(unlocked), 0) AS unlocked
+		      FROM user_declarations WHERE batch_id = $1::uuid) d`, batchID).Scan(
+		&c.Asked, &c.Answered, &c.Flagged, &c.Unlocked)
+	return c, err
+}

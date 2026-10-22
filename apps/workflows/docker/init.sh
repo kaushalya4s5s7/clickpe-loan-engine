@@ -9,7 +9,7 @@ n8n import:credentials --input="$CREDS"
 rm -f "$CREDS"                                   # plaintext never stays on disk
 
 n8n import:workflow --separate --input=/workflows
-for id in loanEngineErrorE loanEngineNotifC loanEngineMatchB loanEngineCrawlA; do
+for id in loanEngineErrorE loanEngineConfmD loanEngineNotifC loanEngineMatchB loanEngineCrawlA; do
   # n8n 2.x publishes workflows; older CLIs activate them.
   n8n publish:workflow --id="$id" 2>/dev/null || n8n update:workflow --id="$id" --active=true
 done

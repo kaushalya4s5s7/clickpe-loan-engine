@@ -9,7 +9,8 @@ from pathlib import Path
 SRC = Path(__file__).resolve().parent.parent
 
 # Fixed ids so workflows can reference each other and credentials survive re-imports.
-WORKFLOW_IDS = {"A": "loanEngineCrawlA", "B": "loanEngineMatchB", "C": "loanEngineNotifC", "E": "loanEngineErrorE"}
+WORKFLOW_IDS = {"A": "loanEngineCrawlA", "B": "loanEngineMatchB", "C": "loanEngineNotifC", "D": "loanEngineConfmD",
+                "E": "loanEngineErrorE"}
 CREDENTIALS = {
     "postgres": {"id": "loanEngineDbCred", "name": "Loan DB"},
     "aws": {"id": "loanEngineSesCrd", "name": "AWS SES"},
