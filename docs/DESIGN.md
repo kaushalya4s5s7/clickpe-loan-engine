@@ -591,6 +591,8 @@ The decision rests on measurements anyone can rerun (OPTIMIZATION §12).
 
 **The link.** `c.<b64url(user_id)>.<exp>.<b64url(hmac16)>`: HMAC-SHA256 with `UNSUBSCRIBE_SECRET`, first 16 bytes, 14-day expiry. The `c.` prefix means an unsubscribe token can't be used here, and the reverse. No PII in the URL.
 
+**Reuse.** Answers are stored per person, apart from the CSV data. After every match run, B loads the batch's people who already answered and re-checks their new LIKELY matches with those answers (same `confirm.js` judge path, ≤25 questions per LLM call, skipped when nobody answered), and C's planner never asks an answered question again. So a new lender's experience rule is resolved without a second question. A GIN index (`jsonb_path_ops`) supports searches over the answers.
+
 **The answer.** Sanity checks → store in `user_declarations` → re-check only that user's LIKELY matches through the existing LLM judge → unlocked matches become `ELIGIBLE` with `decided_by = 'DECLARED'` → one email listing them as *pre-qualified (self-declared)*. The email goes to the recipient of that user's latest SENT notification (already test-mode rewritten), never `users.email` directly.
 
 **Honesty rules.** Copy never says "approved". Contradictory answers are flagged for ops (`flagged`, `flag_reasons`) and not used. The lender still verifies documents at application.

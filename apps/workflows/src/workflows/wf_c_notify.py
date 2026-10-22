@@ -31,7 +31,8 @@ for (const item of $input.all()) {
   const n = item.json;
   if (!n.notification_id || !Array.isArray(n.products) || !n.products.length) continue;
   const productsById = Object.fromEntries(n.products.map((p) => [p.product_id, p]));
-  const plan = questions.planQuestions(n, n.products, productsById, { maxQuestions: 3, maxCards: opts.maxCards });
+  const answered = n.declared && typeof n.declared === "object" ? Object.keys(n.declared) : [];  // never ask twice
+  const plan = questions.planQuestions(n, n.products, productsById, { maxQuestions: 3, maxCards: opts.maxCards, answered });
   const url = plan.questions.length ? questions.confirmLink($env.WEBHOOK_URL, n.user_id, $env.UNSUBSCRIBE_SECRET, now) : null;
   const confirm = url ? { url, questions: plan.questions, unlockable: plan.unlockable, lenders: plan.lenders } : null;
   const { subject, html, text } = email.renderEmail(n, { ...opts, confirm });

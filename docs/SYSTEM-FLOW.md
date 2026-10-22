@@ -151,7 +151,7 @@ CREATED ─► UPLOADED ─► PARSING ─► LOADED ─► MATCHING ─► MATC
                                 (anything can end in FAILED; the user can cancel → ABORTED)
 ```
 
-Workflow D is not on this line. It starts later, whenever a user clicks the link in their email, and works on one person at a time.
+Workflow D is not on this line. It starts later, whenever a user clicks the link in their email, and works on one person at a time. Its answers are reused, though: after every match run, B re-checks the new "to confirm" offers of people who already answered, so nobody is asked twice.
 
 ## After the email: asking instead of guessing (Workflow D)
 

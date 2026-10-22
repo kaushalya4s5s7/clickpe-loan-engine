@@ -187,3 +187,20 @@ test("an unsubscribe token can't open the form (and vice versa)", () => {
   assert.equal(q.confirmToken("U1", SECRET, 1000).split(".").length, 4);
   assert.notEqual(q.confirmToken("U1", SECRET, 1000).slice(2), unsub);
 });
+
+test("planQuestions never asks a question the person already answered", () => {
+  const products = { 1: { id: 1, lender_name: "HDFC Bank", interest_rate_min: 10,
+                          soft_rules: [{ text: "Minimum 2 years of work experience", depends_on: ["work_experience"] }] },
+                     2: { id: 2, lender_name: "Kotak Mahindra Bank", interest_rate_min: 11,
+                          soft_rules: [{ text: "Employed with an MNC", depends_on: ["employer_type"] }] } };
+  const matches = [
+    { product_id: 1, status: "LIKELY", score: 75, unverified: ["Minimum 2 years of work experience"] },
+    { product_id: 2, status: "LIKELY", score: 73, unverified: ["Employed with an MNC"] },
+  ];
+  const user = { user_id: "U1", age: 30, employment_status: "Salaried" };
+  assert.deepEqual(q.planQuestions(user, matches, products).questions.sort(), ["employer_type", "work_experience"]);
+  const plan = q.planQuestions(user, matches, products, { answered: ["work_experience"] });
+  assert.deepEqual(plan.questions, ["employer_type"]);
+  assert.equal(plan.unlockable, 1);
+  assert.deepEqual(q.planQuestions(user, matches, products, { answered: ["work_experience", "employer_type"] }).questions, []);
+});

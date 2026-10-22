@@ -1,8 +1,9 @@
 -- Everything the renderer (and the question planner: product_id, status, score, unverified,
--- interest_rate_min, soft_rules) needs, one item per PENDING notification (bounded: LIMIT 500 per page).
+-- interest_rate_min, soft_rules; declared = Workflow D answers, so it never asks twice) needs,
+-- one item per PENDING notification (bounded: LIMIT 500 per page).
 -- $1 batch_id
 SELECT n.id AS notification_id, n.user_id, n.recipient, u.name, u.monthly_income, u.credit_score,
-       u.employment_status::text AS employment_status, u.age,
+       u.employment_status::text AS employment_status, u.age, d.answers AS declared,
        (SELECT json_agg(x ORDER BY x.score DESC)
           FROM (SELECT m.product_id, m.score, m.status, m.unverified, p.soft_rules, p.product_name, p.lender_name, p.source_url,
                        p.interest_rate_min, p.interest_rate_max, p.min_monthly_income, p.min_credit_score,
@@ -11,6 +12,7 @@ SELECT n.id AS notification_id, n.user_id, n.recipient, u.name, u.monthly_income
                  WHERE m.user_id = n.user_id AND m.notified_at IS NULL) x) AS products
 FROM notifications n
 JOIN users u USING (user_id)
+LEFT JOIN user_declarations d USING (user_id)
 WHERE n.batch_id = $1::uuid AND n.status = 'PENDING'
 ORDER BY n.id
 LIMIT 500;

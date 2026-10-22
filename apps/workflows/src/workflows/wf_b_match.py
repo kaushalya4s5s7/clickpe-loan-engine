@@ -4,7 +4,10 @@ Webhook (signed doorbell) ─┐
                            ├─► Claim batch ─► Load products ─► Plan classes ─► Load user classes
 Sweeper (every 2 min) ─────┘    (CAS+lease)                     (cut points)    (SQL width_bucket)
  ─► Match (bitset) ─► Lookup LLM cache ─► Uncached? ─yes─► Build LLM batches ─► LLM judge ─► Parse ─► Save judgments ─┐
-                                                   └─no──────────────────────────────────────────────────────────────┴─► Final match ─► Save matches ─► Workflow C
+                                                   └─no──────────────────────────────────────────────────────────────┴─► Final match ─► Save matches ─┐
+ ─► Answered people ─► Re-check answers ─► Answers to check? ─yes─► LLM judge (answers) ─► Decide with answers
+    (people who already answered D: re-check new        └─no──────────────────────────────┐   ─► Save answer decisions ─┐
+     "to confirm" offers with their stored answers)                                       └──────────────────────────┴─► Workflow C
 """
 
 from .nodes import WORKFLOW_IDS, Workflow, include
@@ -123,9 +126,53 @@ return [{ json: { batch_id: plan.batch_id, rows: result.rows, funnel } }];
     w.postgres("Save matches", "b_save_matches", (3320, 100), params_expr=(
         "={{ [$json.batch_id, JSON.stringify($json.rows), $('Plan classes').first().json.pg.income, "
         "$('Plan classes').first().json.pg.credit, $('Plan classes').first().json.pg.age, JSON.stringify($json.funnel)] }}"))
+    # People who already answered Workflow D's questions: re-check their new "to confirm" offers with
+    # those stored answers, so nobody is asked the same thing twice (e.g. a new lender wants 2 years).
+    w.postgres("Answered people", "b_load_answered", (3540, 100),
+               params_expr="={{ [$json.batch_id] }}")
+    w.code("Re-check answers", include("email") + include("questions") + include("confirm") + include("llm") + """
+// Only rules their stored answers cover; ~25 questions per request. Nobody answered → skip.
+const { batch_id, people } = $input.first().json;
+const enabled = String($env.LLM_ENABLED ?? "true") === "true";
+const items = enabled ? confirm.batchJudgeItems(people || []) : [];
+const out = [];
+for (let i = 0; i < items.length; i += 25) {
+  const chunk = items.slice(i, i + 25);
+  out.push({ json: { batch_id, pending: chunk, request: llm.judgmentRequest($env.LLM_MODEL, chunk) } });
+}
+return out.length ? out : [{ json: { batch_id, pending: [], request: null } }];
+""", (3760, 100))
+    w.add("Answers to check?", "n8n-nodes-base.if", 2.2, {
+        "conditions": {
+            "options": {"caseSensitive": True, "leftValue": "", "typeValidation": "loose", "version": 2},
+            "conditions": [{"id": "6a1f2c3e-0b1d-4c8e-9f00-00000000b0a2", "leftValue": "={{ $json.pending.length }}",
+                            "rightValue": 0, "operator": {"type": "number", "operation": "gt"}}],
+            "combinator": "and"},
+        "options": {}}, (3980, 100))
+    w.add("LLM judge (answers)", "n8n-nodes-base.httpRequest", 4.2, {
+        "method": "POST", "url": "={{ $env.LLM_BASE_URL.replace(/\\/$/, '') }}/chat/completions",
+        "authentication": "genericCredentialType", "genericAuthType": "httpHeaderAuth",
+        "sendBody": True, "specifyBody": "json", "jsonBody": "={{ JSON.stringify($json.request) }}",
+        "options": {"timeout": 60000, "response": {"response": {"neverError": True}}}},
+        (4200, 0), credentials={"httpHeaderAuth": {"id": "loanEngineLlmCrd", "name": "LLM API"}},
+        retryOnFail=True, maxTries=3, waitBetweenTries=3000, onError="continueRegularOutput")
+    w.code("Decide with answers", include("email") + include("questions") + include("confirm") + include("llm") + """
+// Same rules as Workflow D: all PASS → pre-qualified (DECLARED), any FAIL → removed, else still
+// "to confirm" with fewer conditions. A failed LLM reply = no verdicts = nothing changes.
+const people = $('Answered people').first().json.people || [];
+const batches = $('Re-check answers').all();
+const judgments = [];
+$input.all().forEach((item, i) => {
+  try { judgments.push(...llm.parseJudgments(item.json, batches[i].json.pending, $env.LLM_MODEL)); } catch (e) { /* no verdicts */ }
+});
+const d = confirm.batchDecide(people, batches.flatMap((b) => b.json.pending), judgments);
+return [{ json: { batch_id: batches[0].json.batch_id, updates: d.updates } }];
+""", (4420, 0))
+    w.postgres("Save answer decisions", "b_apply_answers", (4640, 0),
+               params_expr="={{ [$json.batch_id, JSON.stringify($json.updates)] }}")
     w.add("Run workflow C (notify)", "n8n-nodes-base.executeWorkflow", 1.2, {
         "source": "database", "workflowId": {"__rl": True, "value": WORKFLOW_IDS["C"], "mode": "id"},
-        "options": {"waitForSubWorkflow": False}}, (3540, 100))
+        "options": {"waitForSubWorkflow": False}}, (4860, 100))
 
     w.chain("Doorbell webhook", "Verify signature", "Claim batch")
     w.chain("Sweeper every 2 min", "Find stalled batch", "Claim batch")
@@ -134,5 +181,8 @@ return [{ json: { batch_id: plan.batch_id, rows: result.rows, funnel } }];
     w.connect("Need LLM?", "Build LLM batches", 0)
     w.connect("Need LLM?", "Final match", 1)
     w.chain("Build LLM batches", "LLM judge", "Parse judgments", "Save judgments", "Final match")
-    w.chain("Final match", "Save matches", "Run workflow C (notify)")
+    w.chain("Final match", "Save matches", "Answered people", "Re-check answers", "Answers to check?")
+    w.connect("Answers to check?", "LLM judge (answers)", 0)
+    w.connect("Answers to check?", "Run workflow C (notify)", 1)
+    w.chain("LLM judge (answers)", "Decide with answers", "Save answer decisions", "Run workflow C (notify)")
     return w.to_json()

@@ -110,6 +110,9 @@ const clip = (s, n) => (s.length > n ? `${s.slice(0, n - 1).trimEnd()}…` : s);
  */
 function planQuestions(user, matches, productsById, opts = {}) {
   const maxQuestions = opts.maxQuestions ?? 3, maxCards = opts.maxCards ?? 5;
+  // Never ask twice: an offer still blocked by a question the person already answered can't be
+  // helped by asking again (their answer was judged unclear, or it is waiting for the next re-check).
+  const answered = new Set(opts.answered || []);
   const eligibleScores = (matches || []).filter((m) => m.status === "ELIGIBLE").map((m) => num(m.score) ?? 0);
 
   const candidates = [];
@@ -118,7 +121,7 @@ function planQuestions(user, matches, productsById, opts = {}) {
     const p = productOf(productsById, m.product_id);
     if (!p) continue;
     const blocking = blockingSet(m, p);
-    if (!blocking) continue;
+    if (!blocking || [...blocking].some((q) => answered.has(q))) continue;
     // Worth asking only if the unlocked offer would make the top cards; otherwise we'd ask for nothing.
     const s = unlockedScore(p);
     if (eligibleScores.filter((e) => e >= s).length >= maxCards) continue;

@@ -272,6 +272,39 @@ function judgeItems(person, answers) {
  * @param judgments llm.parseJudgments() output [{cache_key, verdict}]
  * @returns {updates:[{product_id, action, score, unverified}], unlocked:[match], narrowed, rejected}
  */
+/**
+ * Workflow B, after every (re-)match: people in the batch who answered before get their LIKELY
+ * matches re-checked with those stored answers, so a new lender asking for the same fact never
+ * asks the person twice. One judge request covers many people, so keys carry the user id.
+ */
+function batchJudgeItems(people) {
+  const items = [];
+  for (const person of people || []) {
+    const answers = person.declared && typeof person.declared === "object" ? person.declared : {};
+    for (const it of judgeItems(person, answers)) {
+      items.push({ ...it, user_id: person.user_id, cache_key: `${person.user_id}|${it.cache_key}` });
+    }
+  }
+  return items;
+}
+
+/** decide() per person over a shared verdict list → [{user_id, product_id, action, score, unverified}]. */
+function batchDecide(people, items, judgments) {
+  const updates = [];
+  let unlocked = 0, narrowed = 0, rejected = 0;
+  for (const person of people || []) {
+    const prefix = `${person.user_id}|`;
+    const strip = (x) => ({ ...x, cache_key: String(x.cache_key).slice(prefix.length) });
+    const own = (items || []).filter((i) => String(i.cache_key).startsWith(prefix)).map(strip);
+    if (!own.length) continue;
+    const verdicts = (judgments || []).filter((j) => String(j.cache_key).startsWith(prefix)).map(strip);
+    const d = decide(person, own, verdicts);
+    for (const u of d.updates) updates.push({ user_id: person.user_id, ...u });
+    unlocked += d.unlocked.length; narrowed += d.narrowed; rejected += d.rejected;
+  }
+  return { updates, unlocked, narrowed, rejected };
+}
+
 function decide(person, items, judgments) {
   const verdict = new Map((judgments || []).map((j) => [j.cache_key, j.verdict]));
   const judgedKeys = new Set((items || []).map((i) => i.cache_key));
@@ -488,7 +521,7 @@ You're receiving this because you answered our questions about your loan matches
 }
 
 if (typeof module !== "undefined") {
-  module.exports = { planInputs, allowedBanks, formValues, parseAnswers, retryPlan, mergeAnswers, sanityCheck, answersToValues,
+  module.exports = { batchJudgeItems, batchDecide, planInputs, allowedBanks, formValues, parseAnswers, retryPlan, mergeAnswers, sanityCheck, answersToValues,
                      judgeFeatures, judgeItems, decide, score, rateText, renderForm, expiredPage, noQuestionsPage,
                      reviewPage, resultPage, renderUnlockedEmail };
 }

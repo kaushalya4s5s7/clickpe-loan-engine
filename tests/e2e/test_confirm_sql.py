@@ -173,3 +173,33 @@ def test_rematch_keeps_a_match_the_person_confirmed(db, sql, new_batch):
     assert got[pid["HDFC Bank"]] == "ELIGIBLE/DECLARED"      # kept
     assert got[pid["ICICI Bank"]] == "LIKELY/RULES"          # ordinary rows still follow the matcher
     assert pid["SBI"] not in got                              # and stale ones are still removed
+
+
+def test_rematch_rechecks_new_offers_with_stored_answers(db, sql, js, new_batch):
+    """B, after matching: a person who answered before is never asked again; their answers are reused."""
+    batch_id, pid = _seed(db, new_batch)
+    assert sql("b_load_answered", batch_id)[0]["people"] == []          # nobody answered yet → B skips
+    db.execute("INSERT INTO user_declarations (user_id, batch_id, answers) VALUES ('U1', %s, %s)",
+               (batch_id, json.dumps({"work_experience": {"total_experience_years": 6, "current_job_years": 2}})))
+
+    [row] = sql("b_load_answered", batch_id)
+    items = js("confirm", "batchJudgeItems", row["people"])
+    assert {i["product_id"] for i in items} == {pid["HDFC Bank"], pid["ICICI Bank"]}   # the experience rules
+    verdicts = [{"cache_key": i["cache_key"], "verdict": "PASS"} for i in items]
+    decisions = js("confirm", "batchDecide", row["people"], items, verdicts)
+    [applied] = sql("b_apply_answers", batch_id, decisions["updates"])
+    assert applied["unlocked"] == 1 and applied["narrowed"] == 1           # ICICI still needs the employer type
+
+    got = dict(db.execute("SELECT product_id, status || '/' || decided_by FROM matches WHERE user_id = 'U1'").fetchall())
+    assert got[pid["HDFC Bank"]] == "ELIGIBLE/DECLARED"
+    assert got[pid["ICICI Bank"]].startswith("LIKELY/")
+    assert db.execute("SELECT unlocked FROM user_declarations WHERE user_id = 'U1'").fetchone()[0] == 1
+    ev = db.execute("SELECT detail FROM pipeline_events WHERE batch_id = %s AND stage = 'confirm'", (batch_id,)).fetchone()[0]
+    assert ev["source"] == "match" and ev["unlocked"] == 1
+
+    # And C's planner, given the stored answers, no longer asks about work experience.
+    [person] = sql("d_load_person", "U1")
+    inputs = js("confirm", "planInputs", person)
+    plan = js("questions", "planQuestions", inputs["user"], inputs["matches"], inputs["productsById"],
+              {"maxQuestions": 3, "maxCards": 5, "answered": list(person["declared"].keys())})
+    assert "work_experience" not in plan["questions"]

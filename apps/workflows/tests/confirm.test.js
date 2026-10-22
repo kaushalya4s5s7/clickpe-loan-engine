@@ -294,3 +294,21 @@ test("answersToValues round-trips stored answers into form values", () => {
     { bank_accounts: ["none"], existing_emi_monthly: "0", business_years: "3" });
   assert.deepEqual(confirm.answersToValues(null), {});
 });
+
+test("batchJudgeItems/batchDecide re-check many people in one request without mixing them up", () => {
+  const rule = { text: "Minimum 2 years of work experience", depends_on: ["work_experience"] };
+  const person = (user_id, years) => ({
+    user_id, age: 35, employment_status: "Salaried", monthly_income: 60000, credit_score: 760,
+    declared: { work_experience: { total_experience_years: years, current_job_years: 1 } },
+    matches: [{ product_id: 7, status: "LIKELY", score: 75, unverified: [rule.text], lender_name: "HDFC Bank",
+                interest_rate_min: 10, soft_rules: [rule] }],
+  });
+  const people = [person("U1", 10), person("U2", 1), { ...person("U3", 5), declared: {} }];
+  const items = confirm.batchJudgeItems(people);
+  assert.deepEqual(items.map((i) => i.cache_key), ["U1|7:0", "U2|7:0"]);  // U3 answered nothing relevant
+  const verdicts = [{ cache_key: "U1|7:0", verdict: "PASS" }, { cache_key: "U2|7:0", verdict: "FAIL" }];
+  const d = confirm.batchDecide(people, items, verdicts);
+  assert.deepEqual(d.updates.map((u) => [u.user_id, u.product_id, u.action]), [["U1", 7, "unlock"], ["U2", 7, "reject"]]);
+  assert.equal(d.unlocked, 1);
+  assert.equal(d.rejected, 1);
+});
