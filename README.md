@@ -55,7 +55,7 @@ Five n8n workflows, each with one job. They hand work to each other through the 
 | **B · Match users to loans** | Signed webhook from the ingest Lambda, **or** a 2-minute sweeper | Claims the batch, runs the Treasure Hunt, writes `matches`, calls C | HMAC + timestamp check; compare-and-set claim + 15-min lease, so two runs can't both match |
 | **C · Notify matched users** | Called by B (Execute Workflow) | Queues one email per user, renders it (with a link to ≤ 3 questions when answers could unlock offers), sends via the **AWS SES node** at 1/s | Unique index makes a duplicate email impossible; failures go out the error output, retried, then FAILED |
 | **D · Confirm missing facts** | The user opens the signed link in C's email, then submits the form | Shows only that person's planned questions, stores the answers, re-checks their LIKELY matches, emails what is now pre-qualified | Signed, expiring token (no PII in the link); sanity checks before anything is used; contradictions flagged for ops, not used; email goes to the address C already used |
-| **E · Error handler** | Any of A/B/C fails | Writes the failure to `pipeline_events`, shown in the console timeline | Every workflow points at it |
+| **E · Error handler** | Any of A/B/C/D fails | Writes the failure to `pipeline_events`, shown in the console timeline | Every workflow points at it |
 
 Native nodes carry the visible process (Webhook, Schedule, Postgres, IF, Merge, Loop Over Items, Wait, AWS SES, Execute Workflow). Algorithms (bitset matching, HMAC check, HTML parsing) live in Code nodes whose source is in `apps/workflows/src/code/*.js`, unit-tested with `node --test`.
 

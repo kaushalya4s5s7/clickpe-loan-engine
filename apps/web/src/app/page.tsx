@@ -8,7 +8,7 @@ const STEPS = [
   { title: "Upload a lead list", text: "A CSV from Excel or Google Sheets. We check your columns before anything is uploaded." },
   { title: "We clean every row", text: "₹1,20,000, 1.2L and 'NA' credit scores are understood. Bad rows come back with their row number." },
   { title: "Matched to lender rules", text: "Criteria are read daily from lenders' own websites. Rules decide first; AI only reads what rules can't." },
-  { title: "Each person gets their options", text: "One personal email with the loans they may get and exactly why. Never twice for the same offer." },
+  { title: "Each person gets their options", text: "One personal email with the loans they may get and exactly why. A few quick answers can confirm more." },
 ];
 
 const FOR_TEAM = [
@@ -22,7 +22,7 @@ const FOR_TEAM = [
 const FOR_BORROWERS = [
   ["Only loans they may get", "Income, credit score, age and employment checked against published criteria."],
   ["The reason, in their numbers", "“Your income ₹62,000 ≥ ₹25,000 minimum” — not a generic pitch."],
-  ["Honest about unknowns", "Conditions we can't check, like work experience, are listed to confirm."],
+  ["Asked, never guessed", "If a lender needs something we don't know, like work experience, they answer a quick question instead."],
   ["No spam", "At most one email a week, never the same offer twice, one-click unsubscribe."],
 ];
 

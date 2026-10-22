@@ -17,7 +17,7 @@ The goal: the **smallest structure that stays clean, testable and production-rea
 | Orchestration trigger | Rings n8n's webhook when a batch is loaded (HMAC-signed) | Go |
 | Notifications (non-send parts) | Unsubscribe tokens, suppression list | Go |
 | Reporting (read model) | Overview, catalogue and batch summary for the console | Go |
-| Product discovery · Matching · Email sending | Workflows A, B and C | n8n (the brief requires it) |
+| Product discovery · Matching · Email sending · Confirming missing facts | Workflows A, B, C and D | n8n (the brief requires it) |
 | Operations console | Landing, upload flow, batch results, history, catalogue | Next.js (static export) |
 | Database | Connections, transactions, embedded migrations (the schema is the contract between Go and n8n) | Go + SQL |
 

@@ -82,3 +82,15 @@ def test_workflow_b_hands_off_to_c():
     assert call["parameters"]["workflowId"]["value"] == WORKFLOWS["C_notify.json"]["id"]
     assert all(w["settings"].get("errorWorkflow") == WORKFLOWS["E_errors.json"]["id"]
                for k, w in WORKFLOWS.items() if k != "E_errors.json")
+
+
+def test_workflow_c_links_to_workflow_d():
+    """The question link C puts in emails must hit D's GET webhook, and D's form must post to D's POST webhook."""
+    render = next(n for n in WORKFLOWS["C_notify.json"]["nodes"] if n["name"] == "Render emails")
+    assert "questions.confirmLink(" in render["parameters"]["jsCode"]
+    hooks = {n["parameters"]["httpMethod"]: n["parameters"]["path"]
+             for n in WORKFLOWS["D_confirm.json"]["nodes"] if n["type"] == "n8n-nodes-base.webhook"}
+    assert hooks == {"GET": "confirm", "POST": "confirm-submit"}
+    questions_js = (ROOT / "src" / "code" / "questions.js").read_text()
+    assert "webhook/confirm?t=" in questions_js
+    assert "webhook/confirm-submit" in (ROOT / "src" / "workflows" / "wf_d_confirm.py").read_text()

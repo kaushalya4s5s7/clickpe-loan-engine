@@ -77,7 +77,7 @@ Think of the system as a small office. Each "employee" is a technology with one 
 | 📬 The inbox tray | **SQS** (a queue) | Holds "a new file arrived" notes until someone is free to handle them | The tray on a desk where letters wait |
 | 🧹 The data cleaner | **Ingest Lambda** (Go, in `apps/ingest_worker`) | Reads the file, checks every row, saves good rows | The person who checks and files every form |
 | 🗄️ The filing cabinet | **PostgreSQL on RDS** | Stores everything: people, loans, matches, emails, history | The big filing cabinet |
-| 🤖 The manager | **n8n** (in Docker, `apps/workflows`) | Runs the three workflows: crawl, match, email | The manager who follows a checklist |
+| 🤖 The manager | **n8n** (in Docker, `apps/workflows`) | Runs four workflows: crawl, match, email, and confirm (asks people for missing facts) | The manager who follows a checklist |
 | 🧠 The consultant | **LLM** (Gemini, via an OpenAI-style API) | Reads bank web pages and turns them into rules; judges a few fuzzy rules | An expert you call only when needed (they charge per call!) |
 | ✉️ The post office | **SES** (Simple Email Service) | Actually delivers the emails | The post office |
 | 🔔 The doorbell | **Webhook** (HMAC-signed) | Lets the data cleaner tell the manager "a batch is ready!" | Ringing a bell at the manager's door |
@@ -345,6 +345,13 @@ and call Workflow C.
 Covered in detail in **Part 8**. In short: claim the batch (MATCHED → NOTIFYING), decide who should get
 an email (consent, unsubscribes, max one per week, no duplicates), build a personal email, send it via
 SES one per second, record sent or failed, and mark the batch **DONE**.
+
+### Step 10½: the person answers a few questions (Workflow D)
+
+Covered in **Part 8** ("Asking instead of guessing"). If a lender needs a fact the CSV doesn't have
+(work experience, employer type, an existing account with that bank), the email carries a signed link to
+a short form. The person's answers re-check only their own "to confirm" offers, and any that now pass
+become **pre-qualified (self-declared)**. Later match runs reuse the answers, so nobody is asked twice.
 
 ### Step 11: The website shows it all live
 
@@ -621,9 +628,34 @@ The brief says: **never email addresses from the sample CSV.** So with `TEST_MOD
 While the AWS account is in the **SES sandbox**, SES only sends to **verified** addresses, which is why
 those aliases (and the sender address) had to be verified by clicking a link.
 
+### Asking instead of guessing: Workflow D
+
+Many offers end up "to confirm" because a lender asks for something the CSV doesn't have. On `users.csv`
+that's about 57,000 offers, but they're blocked by only about **5 facts**: work experience, employer
+type, an existing bank account, city and business age. So we ask the person, like a shop assistant
+asking "what size are you?" instead of guessing.
+
+1. **Plan the questions (Workflow C, `questions.js`).** One question per *fact*, not per lender: "how long
+   have you been working?" settles HDFC, ICICI and IndusInd at once. At most **3 questions**, and only
+   if an answer could confirm an offer good enough for the person's top 5.
+2. **Ask inside the email they already get.** A signed link that expires in 14 days. No extra email.
+3. **The form (Workflow D, GET `webhook/confirm`).** Shows only that person's questions, quoting each
+   lender's own words as the reason.
+4. **The answers (Workflow D, POST `webhook/confirm-submit`).** Sanity checks first: answers that
+   contradict each other (20 years of experience at age 30) are **flagged for the ops team** and not used.
+   Good answers are saved in `user_declarations`. Then the AI judge re-checks **only this person's**
+   "to confirm" offers, and offers that now pass become **pre-qualified (self-declared)**. A follow-up
+   email lists them.
+5. **Answers are reused.** After every match run, Workflow B re-checks new "to confirm" offers of people
+   who already answered, and C never asks the same question twice.
+
+**Never "approved".** Answers are self-declared, and the lender checks documents when the person applies.
+📍 `wf_d_confirm.py`, `code/questions.js`, `code/confirm.js`, `sql/d_*.sql`, `sql/b_load_answered.sql`,
+`sql/b_apply_answers.sql`.
+
 ### Workflow E: the error catcher
 
-If **any** step of A, B or C crashes, n8n runs **Workflow E**, which writes the failure (which workflow,
+If **any** step of A, B, C or D crashes, n8n runs **Workflow E**, which writes the failure (which workflow,
 which node, the error message) into `pipeline_events`. So errors show up in the website's timeline,
 not just inside n8n. 📍 `wf_error.py`, `sql/record_event.sql`.
 
@@ -631,7 +663,7 @@ not just inside n8n. 📍 `wf_error.py`, `sql/record_event.sql`.
 
 ## Part 9: The database: every table in plain words
 
-All in `packages/database/migrations/001_schema.sql` (plus small additions in `002`–`006`).
+All in `packages/database/migrations/001_schema.sql` (plus small additions in `002`–`008`).
 **Migrations** are numbered SQL files that run in order, each only once, like save points in a game.
 
 | Table | What one row means | Who writes it | Who reads it |
@@ -642,9 +674,10 @@ All in `packages/database/migrations/001_schema.sql` (plus small additions in `0
 | `crawl_sources` | One bank page to crawl, plus its "did it change?" memory (ETag, fingerprint) | seed migrations, Workflow A | Workflow A |
 | `crawl_runs` | One crawl attempt and its outcome | Workflow A | you, for debugging |
 | `loan_products` | One loan with its rules, quotes (evidence), rules fingerprint | Workflow A | Workflow B, website catalogue |
-| `matches` | "This person may qualify for this loan" (ELIGIBLE / LIKELY, score) | Workflow B | Workflow C, website |
+| `matches` | "This person may qualify for this loan" (ELIGIBLE / LIKELY, score; `decided_by` = RULES, LLM or DECLARED) | Workflows B and D | Workflow C, website |
 | `llm_judgments` | One cached AI verdict for (loan rule × bucket range) | Workflow B | Workflow B |
-| `notifications` | One email to one person (PENDING / SENT / FAILED), SES message id | Workflow C | Workflow C, website |
+| `notifications` | One email to one person (PENDING / SENT / FAILED), SES message id, and which questions it asked | Workflow C | Workflow C, website |
+| `user_declarations` | One person's self-declared answers (work experience, employer type…), whether they were flagged, and how many offers they confirmed | Workflow D | Workflows B, C and D, website counts |
 | `suppression` | One unsubscribed/bounced email, stored as a **hash** | API (unsubscribe) | Workflow C |
 | `pipeline_events` | One line in a batch's diary/timeline | everyone | the website |
 
@@ -798,16 +831,19 @@ is error-prone and impossible to test. So:
 
 | File | What it's for |
 |---|---|
-| `build.py` | Generates `dist/A_crawl.json`, `B_match.json`, `C_notify.json`, `E_errors.json` |
+| `build.py` | Generates `dist/A_crawl.json`, `B_match.json`, `C_notify.json`, `D_confirm.json`, `E_errors.json` |
 | `src/workflows/nodes.py` | Small helpers to create n8n nodes in Python (`w.postgres(...)`, `w.code(...)`, `w.chain(...)`) and embed the JS/SQL files |
 | `src/workflows/wf_a_crawl.py` | Workflow A's graph (crawler) |
 | `src/workflows/wf_b_match.py` | Workflow B's graph (matcher) |
 | `src/workflows/wf_c_notify.py` | Workflow C's graph (notifier) |
+| `src/workflows/wf_d_confirm.py` | Workflow D's graph (the confirmation form: two webhooks) |
 | `src/workflows/wf_error.py` | Workflow E's graph (error catcher) |
 | `src/code/crawl.js` | `htmlToText` (HTML → plain text), `relevantSection` (keep only eligibility lines), `validateProducts` (the verbatim-quote rule), `sha256` |
 | `src/code/llm.js` | `extractionRequest` (ask the AI to read a page), `judgmentRequest` (ask about soft rules), `parseJsonContent` (safely read the AI's JSON, even with extra "thinking" text or ```json fences), `parseJudgments` |
 | `src/code/matcher.js` | `buildCuts` (thresholds → cut points), `attributeMasks` (prepare the switches), `matchClasses` (AND them per class + soft rules), `cacheKey`, `score` |
 | `src/code/email.js` | `renderEmail` (build the HTML + text email), `reasons` ("why you qualify"), `formatINR`, `escapeHtml`, `unsubscribeToken` |
+| `src/code/questions.js` | The question planner (`planQuestions`, `planForClasses`) and the signed form link (`confirmToken`, `verifyConfirmToken`, `confirmLink`) |
+| `src/code/confirm.js` | Workflow D's brain: the form and result pages, reading and sanity-checking answers, building AI judge items, deciding unlock / narrow / reject (`decide`, and `batchJudgeItems` / `batchDecide` for B) |
 | `src/code/signature.js` | `verifyDoorbell`: check the HMAC seal and the 5-minute window |
 | `src/sql/a_load_sources.sql`, `a_save_products.sql`, `a_save_page_state.sql` | Crawler: read pages to visit, save products, remember page state |
 | `src/sql/b_find_stalled.sql` | Sweeper: find a forgotten or crashed batch |
@@ -820,11 +856,13 @@ is error-prone and impossible to test. So:
 | `src/sql/c_load_pending.sql` | Load everything needed to write each email |
 | `src/sql/c_mark_sent.sql`, `c_mark_failed.sql` | Record each send result |
 | `src/sql/c_finish.sql` | Count results, → DONE |
+| `src/sql/b_load_answered.sql`, `b_apply_answers.sql` | After matching: re-check people who already answered, with their stored answers |
+| `src/sql/d_load_person.sql`, `d_save_declaration.sql`, `d_apply_decisions.sql`, `d_mark_notified.sql` | Workflow D: load one person, save answers, apply the re-check, mark the follow-up email sent |
 | `src/sql/record_event.sql` | Write a timeline line (used by Workflow E) |
-| `docker/init.sh` | When the n8n container starts: import credentials + the 4 workflows and switch them on |
+| `docker/init.sh` | When the n8n container starts: import credentials + the 5 workflows and switch them on |
 | `docker/make_credentials.js` | Builds n8n's credential entries (Postgres, AWS, LLM) from environment variables |
 | `docker/create_databases.sql` | Creates n8n's own database and the app database on first boot |
-| `tests/*.test.js` | Unit tests for crawl, email, matcher, LLM parsing |
+| `tests/*.test.js` | Unit tests for crawl, email, matcher, LLM parsing, questions and confirm |
 | `tests/run_module.js` | Lets Python tests call the JS modules |
 | `tests/test_workflows.py` | Checks the generated workflows are wired correctly |
 

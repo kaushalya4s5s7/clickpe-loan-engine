@@ -1,6 +1,6 @@
 // Package reporting is the read model for the operations console: overview numbers, the loan
 // catalogue, and what a batch produced. It never writes; its tables have other owners (n8n
-// workflows A/B/C, ingestion). A screen that needs a new number gets it here, never by letting a
+// workflows A/B/C/D, ingestion). A screen that needs a new number gets it here, never by letting a
 // handler query tables directly.
 package reporting
 
