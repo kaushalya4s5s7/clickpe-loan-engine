@@ -41,7 +41,8 @@
 * { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; }
 body {
-  background: var(--bg);
+  /* Transparent so the hatch painted on <html> shows in the side gutters; .frame paints the white column. */
+  background: transparent;
   color: var(--text);
   font-family: var(--font-sans), "Outfit", system-ui, sans-serif;
   font-size: 15px;
