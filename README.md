@@ -26,46 +26,6 @@ Upload a CSV of users → the system discovers personal-loan products on lender 
 
 ![Architecture: browser, AWS (API Gateway, Lambdas, S3, SQS, RDS, SES) and n8n in Docker](docs/architecture.png)
 
-The same flow as a Mermaid diagram (renders on GitHub):
-
-```mermaid
-flowchart LR
-  subgraph Browser
-    UI[Next.js console<br/>AWS Amplify, HTTPS]
-  end
-  subgraph AWS["AWS · ap-south-1"]
-    APIGW[API Gateway REST<br/>API key + throttling]
-    LUP[λ uploads / batches<br/>reporting / unsubscribe]
-    S3[(S3 uploads/<br/>multipart, SHA-256 per part)]
-    SQS[[SQS ingest queue]]
-    DLQ[[DLQ + alarm]]
-    LIN[λ ingest<br/>stream → validate → COPY → merge]
-    RDS[(RDS PostgreSQL)]
-    SES[SES]
-  end
-  subgraph Docker["Docker (local)"]
-    N8N{{n8n}}
-    A[WF-A crawler<br/>daily]
-    B[WF-B matcher]
-    C[WF-C notifier]
-  end
-  LLM[(Any OpenAI-compatible LLM)]
-  Banks[(15 lender pages<br/>SBI · HDFC · ICICI · Axis …)]
-  Inbox[(Gmail +aliases)]
-
-  UI -- JSON --> APIGW --> LUP --> RDS
-  UI -- file parts, presigned PUT --> S3
-  S3 -- ObjectCreated --> SQS --> LIN --> RDS
-  SQS -. 3 failures .-> DLQ
-  LIN -- HMAC-signed doorbell via ngrok tunnel --> B
-  B -- sweeper every 2 min --> RDS
-  A --> Banks
-  A --> LLM
-  B --> LLM
-  A & B & C --> RDS
-  B -- Execute Workflow --> C --> SES --> Inbox
-  N8N --- A & B & C
-```
 
 **The request path, hop by hop**
 1. **Upload (no file bytes through our API).** The page asks `POST /v1/uploads` for a session, then PUTs the file **directly to S3** in 8 MB parts. Up to 4 parts go in parallel, each signed with its SHA-256, and an interrupted upload resumes from the parts S3 already has. This avoids API Gateway's 10 MB / 29 s limits entirely.
