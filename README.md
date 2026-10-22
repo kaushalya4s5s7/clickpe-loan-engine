@@ -24,6 +24,10 @@ Upload a CSV of users → the system discovers personal-loan products on lender 
 
 ## Architecture
 
+![Architecture: browser, AWS (API Gateway, Lambdas, S3, SQS, RDS, SES) and n8n in Docker](docs/architecture.png)
+
+The same flow as a Mermaid diagram (renders on GitHub):
+
 ```mermaid
 flowchart LR
   subgraph Browser
