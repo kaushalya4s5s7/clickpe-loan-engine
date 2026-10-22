@@ -6,7 +6,7 @@ Upload a CSV of users → the system discovers personal-loan products on lender 
 | | |
 |---|---|
 | Tests | 39 Go tests (`go test ./...`, real Postgres, one fresh DB per test) · 33 Python harness tests (n8n SQL + JS against the Go binaries) · 17 workflow JS · 15 console TS |
-| Design docs | [DESIGN](docs/DESIGN.md) · [optimisation](docs/OPTIMIZATION.md) · [scale](docs/SCALE.md) · [brief → build map](docs/REQUIREMENTS.md) · [repo architecture](docs/REPO-ARCHITECTURE.md) · [issues we hit & fixes](docs/ISSUES.md) |
+| Design docs | [DESIGN](docs/DESIGN.md) · [optimisation](docs/OPTIMIZATION.md) · [scale](docs/SCALE.md) · [brief → build map](docs/REQUIREMENTS.md) · [repo architecture](docs/REPO-ARCHITECTURE.md) · [issues we hit & fixes](docs/ISSUES.md) · [borrower protection & next steps](docs/BORROWER-PROTECTION.md) |
 | Live console | **https://main.d25bd5m5z7i2j8.amplifyapp.com** (AWS Amplify, ap-south-1) |
 
 ### Where each deliverable is
@@ -241,5 +241,6 @@ Known limitations (intentionally out of scope):
 - One batch is matched per sweeper tick.
 - Confirmation answers are self-declared. We run sanity checks and flag contradictions, but we can't verify them. Production would use consented data (Account Aggregator, bureau soft pull, EPFO).
 - A rule about something we can't ask in a simple form (category "other", apart from EMI affordability) stays "to confirm".
+- Borrower-protection features left out because of the time box: ranking by true cost (fees and APR) instead of headline rate, "close, but not yet" explanations for non-matches (including users with zero matches, who get no email today), and listing the lenders we checked that didn't match. The harms, sources and designs are in [BORROWER-PROTECTION](docs/BORROWER-PROTECTION.md).
 
 Full analysis: [DESIGN §13–14](docs/DESIGN.md).
