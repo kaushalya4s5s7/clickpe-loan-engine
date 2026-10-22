@@ -335,36 +335,54 @@ function decide(person, items, judgments) {
 
 // ---- pages -------------------------------------------------------------------------------------
 
-const STYLE = `:root{color-scheme:light}
+// Same visual language as the console (apps/web/src/app/globals.css): hatched gutters, a white
+// framed column, Instrument Serif headings, Outfit text, one blue accent, hairline borders.
+const STYLE = `:root{color-scheme:light;--text:#1e1e1e;--text-2:#4a4a4a;--muted:#7f7f7f;--line:#ededed;--line-strong:#c9d0da;
+--surface-2:#f7f8fa;--accent:#0077ff;--accent-soft:#f0f6ff;--accent-line:#c2dcff;--ok:#15803d;--bad:#c0392b;--bad-soft:#fdeeec}
 *{box-sizing:border-box}
-body{margin:0;background:#f4f4f5;color:#18181b;font:16px/1.5 -apple-system,"Segoe UI",Roboto,Arial,sans-serif}
-main{max-width:560px;margin:0 auto;padding:24px 16px 40px}
-h1{font-size:22px;line-height:1.3;margin:0 0 8px}
+html{background:repeating-linear-gradient(-45deg,#ededed 0 1px,#0000 1px 11px) fixed,#fff}
+body{margin:0;color:var(--text);font:15px/1.55 "Outfit",system-ui,-apple-system,"Segoe UI",sans-serif;-webkit-font-smoothing:antialiased}
+.frame{max-width:640px;min-height:100vh;margin:0 auto;background:#fff;border-left:1px solid var(--line);border-right:1px solid var(--line)}
+.brand{display:flex;align-items:baseline;justify-content:space-between;gap:12px;padding:18px 24px;border-bottom:1px solid var(--line)}
+.brand b{font:400 26px/1 "Instrument Serif",Georgia,serif;letter-spacing:-.02em}
+.brand span{font-size:13px;color:var(--muted)}
+main{padding:28px 24px 48px}
+h1{font:400 34px/1.1 "Instrument Serif",Georgia,serif;letter-spacing:-.02em;margin:0 0 10px;text-wrap:balance}
 p{margin:0 0 12px}
-.card{background:#fff;border:1px solid #e4e4e7;border-radius:12px;padding:20px;margin:0 0 16px}
-fieldset{border:0;padding:0;margin:0}
-legend{font-size:17px;font-weight:700;padding:0;margin:0 0 4px}
-label{display:block;font-size:15px;margin:12px 0 4px}
-input[type=text],input[type=number],select{width:100%;min-height:44px;padding:8px 12px;font:inherit;color:inherit;border:1px solid #a1a1aa;border-radius:8px;background:#fff}
-.check{display:flex;align-items:center;gap:10px;min-height:44px;margin:0}
-.check input{width:22px;height:22px;margin:0;flex:none}
-.why{margin:6px 0 0;padding-left:18px;font-size:13px;color:#52525b}
-.note{font-size:14px;color:#3f3f46}
-.small{font-size:13px;color:#52525b}
-.err{color:#b91c1c;font-size:14px;font-weight:600;margin:8px 0 0}
-.alert{border-color:#fca5a5;background:#fef2f2}
-button{display:block;width:100%;min-height:48px;margin-top:4px;border:0;border-radius:8px;background:#4338ca;color:#fff;font:inherit;font-weight:600;cursor:pointer}
-a{color:#4338ca}
-.btn{display:inline-block;margin-top:10px;padding:10px 16px;border-radius:8px;background:#4338ca;color:#fff;text-decoration:none;font-size:14px;font-weight:600}
-.lender{font-size:12px;color:#71717a;text-transform:uppercase;letter-spacing:.04em}
-.product{font-size:18px;font-weight:700;margin:2px 0 4px}
-.ok{color:#15803d;font-weight:600;font-size:14px;margin-top:8px}
-:focus-visible{outline:3px solid #a5b4fc;outline-offset:2px}`;
+.card{background:#fff;border:1px solid var(--line);border-radius:14px;padding:20px;margin:0 0 14px;min-width:0;overflow-wrap:anywhere}
+fieldset.card{display:block}
+legend{float:left;width:100%;padding:0;margin:0 0 6px;font:400 24px/1.2 "Instrument Serif",Georgia,serif;letter-spacing:-.01em}
+legend+*{clear:both}
+label{display:block;font-size:14px;font-weight:600;color:var(--text-2);margin:14px 0 6px}
+input[type=text],input[type=number],select{display:block;width:100%;max-width:100%;min-height:46px;padding:10px 14px;font:inherit;color:inherit;
+border:1px solid var(--line-strong);border-radius:10px;background:#fff}
+input:focus,select:focus{border-color:var(--accent);outline:3px solid var(--accent-soft)}
+.check{display:flex;align-items:center;gap:12px;min-height:46px;margin:8px 0 0;padding:0 14px;border:1px solid var(--line);border-radius:10px;font-weight:500;color:var(--text);cursor:pointer}
+.check:has(input:checked){border-color:var(--accent);background:var(--accent-soft)}
+.check input{width:20px;height:20px;margin:0;flex:none;accent-color:var(--accent)}
+.small{font-size:13px;color:var(--muted)}
+.why{margin:6px 0 0;padding:10px 12px 10px 28px;font-size:13px;color:var(--text-2);background:var(--surface-2);border-radius:10px}
+.why li+li{margin-top:4px}
+.note{font-size:14px;color:var(--text-2);background:var(--accent-soft);border:1px solid var(--accent-line);border-radius:10px;padding:10px 14px;margin:14px 0 0}
+.err{color:var(--bad);font-size:14px;font-weight:600;margin:8px 0 0}
+.alert{border-color:#f3b6ae;background:var(--bad-soft)}
+button{display:block;width:100%;min-height:50px;margin-top:6px;border:0;border-radius:999px;background:var(--accent);color:#fff;font:inherit;font-weight:600;cursor:pointer}
+button:hover{background:#0068e0}
+a{color:var(--accent)}
+.btn{display:inline-block;margin-top:10px;padding:10px 18px;border-radius:999px;background:var(--accent);color:#fff;text-decoration:none;font-size:14px;font-weight:600}
+.lender{font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.08em}
+.product{font:400 24px/1.2 "Instrument Serif",Georgia,serif;margin:2px 0 4px}
+.ok{color:var(--ok);font-weight:600;font-size:14px;margin-top:8px}
+:focus-visible{outline:3px solid var(--accent-line);outline-offset:2px}
+@media (max-width:480px){main{padding:20px 16px 40px}.brand{padding:14px 16px}h1{font-size:30px}.card{padding:16px}}`;
 
 function page(title, body) {
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="robots" content="noindex"><title>${escapeHtml(title)}</title><style>${STYLE}</style></head>
-<body><main>${body}</main></body></html>`;
+<meta name="robots" content="noindex"><title>${escapeHtml(title)}</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Serif&family=Outfit:wght@400;500;600&display=swap">
+<style>${STYLE}</style></head>
+<body><div class="frame"><header class="brand"><b>Loan Match</b><span>Loan Eligibility Engine</span></header>
+<main>${body}</main></div></body></html>`;
 }
 
 function expiredPage() {
