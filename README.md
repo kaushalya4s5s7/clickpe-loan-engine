@@ -7,6 +7,18 @@ Upload a CSV of users → the system discovers personal-loan products on lender 
 |---|---|
 | Tests | 39 Go tests (`go test ./...`, real Postgres, one fresh DB per test) · 33 Python harness tests (n8n SQL + JS against the Go binaries) · 17 workflow JS · 15 console TS |
 | Design docs | [DESIGN](docs/DESIGN.md) · [optimisation](docs/OPTIMIZATION.md) · [scale](docs/SCALE.md) · [brief → build map](docs/REQUIREMENTS.md) · [repo architecture](docs/REPO-ARCHITECTURE.md) · [issues we hit & fixes](docs/ISSUES.md) |
+| Live console | **https://main.d25bd5m5z7i2j8.amplifyapp.com** (AWS Amplify, ap-south-1) |
+
+### Where each deliverable is
+
+| The brief asks for | Where it is |
+|---|---|
+| **`serverless.yml`** deploying all AWS resources | [`serverless.yml`](serverless.yml): API Gateway, 3 Go Lambdas, S3, SQS + DLQ, RDS PostgreSQL, IAM, SES sender user |
+| **`docker-compose.yml`** for self-hosted n8n | [`docker-compose.yml`](docker-compose.yml): n8n + Postgres, optional ngrok / Cloudflare tunnel |
+| **JSON file for each n8n workflow** | [`apps/workflows/dist/`](apps/workflows/dist): `A_crawl.json`, `B_match.json`, `C_notify.json`, `E_errors.json` |
+| **Architecture diagram** | [Architecture](#architecture) below (more detail: [SYSTEM-FLOW](docs/SYSTEM-FLOW.md)) |
+| **Setup & deployment**, including **n8n credentials (AWS, database)** | [Setup](#setup), the credentials table in step 1 |
+| **Design decisions**: workflow design, **web crawling strategy**, **Optimization Treasure Hunt** | [Workflow design](#workflow-design) · [Web crawling strategy](#web-crawling-strategy) · [Treasure Hunt](#the-optimisation-treasure-hunt-workflow-b) · [Decisions table](#design-decisions-and-what-we-rejected) |
 
 ---
 
@@ -15,7 +27,7 @@ Upload a CSV of users → the system discovers personal-loan products on lender 
 ```mermaid
 flowchart LR
   subgraph Browser
-    UI[Next.js console<br/>CloudFront + S3]
+    UI[Next.js console<br/>AWS Amplify, HTTPS]
   end
   subgraph AWS["AWS · ap-south-1"]
     APIGW[API Gateway REST<br/>API key + throttling]
@@ -34,14 +46,14 @@ flowchart LR
     C[WF-C notifier]
   end
   LLM[(Any OpenAI-compatible LLM)]
-  Banks[(HDFC · ICICI · Kotak pages)]
+  Banks[(15 lender pages<br/>SBI · HDFC · ICICI · Axis …)]
   Inbox[(Gmail +aliases)]
 
   UI -- JSON --> APIGW --> LUP --> RDS
   UI -- file parts, presigned PUT --> S3
   S3 -- ObjectCreated --> SQS --> LIN --> RDS
   SQS -. 3 failures .-> DLQ
-  LIN -- signed doorbell via tunnel --> B
+  LIN -- HMAC-signed doorbell via ngrok tunnel --> B
   B -- sweeper every 2 min --> RDS
   A --> Banks
   A --> LLM
@@ -59,12 +71,38 @@ flowchart LR
 5. **Notify (Workflow C).** It queues one notification per user with *new* matches and renders a personalised email. It sends through the **n8n AWS SES node** at 1 msg/s and records SENT/FAILED, so a duplicate send can't happen.
 6. **Discover (Workflow A).** Runs daily: conditional GET → keyword-windowed text → hash. The LLM is called only when a lender's eligibility text actually changed. Every extracted number must be backed by a verbatim quote from the page.
 
-**The console** (`apps/web`, Next.js static export on S3 + CloudFront):
+**The console** (`apps/web`, Next.js static export hosted on AWS Amplify):
 - **Overview:** what the engine does, how it works, live numbers.
 - **Upload:** a guided flow. 1 choose the file → 2 the browser checks your columns using the server's own alias table, and shows the first rows as they'll be read → 3 resumable upload.
 - **Upload details:** a pipeline tracker, validation numbers with the first errors and a full report download, the matching funnel, matches per lender product, and email results. Polled live.
 - **Uploads:** history of all uploads.
 - **Loan catalogue:** every product the crawler found, with the verbatim quotes it was read from.
+
+---
+
+## Workflow design
+
+Four n8n workflows, each with one job. They hand work to each other through the batch status in Postgres, so any step can crash and be safely re-run.
+
+| Workflow | Starts when | Does | Robustness built in |
+|---|---|---|---|
+| **A · Discover loan products** | Daily 02:00 IST, or *Run now* | Crawls 15 lender pages, extracts eligibility rules with an LLM, upserts `loan_products` | Skips unchanged pages; keeps yesterday's data if extraction fails; retries 3× |
+| **B · Match users to loans** | Signed webhook from the ingest Lambda, **or** a 2-minute sweeper | Claims the batch, runs the Treasure Hunt, writes `matches`, calls C | HMAC + timestamp check; compare-and-set claim + 15-min lease, so two runs can't both match |
+| **C · Notify matched users** | Called by B (Execute Workflow) | Queues one email per user, renders it, sends via the **AWS SES node** at 1/s | Unique index makes a duplicate email impossible; failures go out the error output, retried, then FAILED |
+| **E · Error handler** | Any of A/B/C fails | Writes the failure to `pipeline_events`, shown in the console timeline | Every workflow points at it |
+
+Native nodes carry the visible process (Webhook, Schedule, Postgres, IF, Merge, Loop Over Items, Wait, AWS SES, Execute Workflow). Algorithms (bitset matching, HMAC check, HTML parsing) live in Code nodes whose source is in `apps/workflows/src/code/*.js`, unit-tested with `node --test`.
+
+## Web crawling strategy
+
+Workflow A, once a day, per lender page in `crawl_sources`:
+
+1. **Fetch politely.** Conditional GET with the saved `ETag`/`Last-Modified`, about 1 request per second. A *304 Not Modified* stops here.
+2. **Keep only the relevant text.** Strip scripts and navigation, then keep windows around eligibility keywords (income, CIBIL, age, salaried…). No CSS selectors, so a site redesign doesn't break extraction.
+3. **Hash it.** If the text hash equals yesterday's, **skip the LLM** (zero cost on most days).
+4. **LLM extracts structured rules** (min income, credit score, age range, employment types, rate), one call per lender, 4 at a time.
+5. **Validate against the page.** Every number must come with a **verbatim quote** found in the page text, or it is dropped. This blocks hallucinations and prompt injection.
+6. **Upsert** into `loan_products`. A changed rule gets a new `criteria_hash`, so cached LLM answers for the old rule are not reused.
 
 ---
 
@@ -151,15 +189,17 @@ docker compose --profile ngrok up -d           # → https://<NGROK_DOMAIN>, the
 docker compose --profile tunnel up -d && docker compose logs cloudflared | grep trycloudflare.com
 #   → put "<url>/webhook/batch-loaded" in .env as N8N_WEBHOOK_URL, and "<url>/" as N8N_PUBLIC_URL
 
+# Shortcut: after the SSM parameters above, `bash scripts/deploy_all.sh` runs every step below
+# (tunnel, Lambdas, serverless deploy, migrations, n8n → RDS, console on S3 + Amplify, smoke test).
 bash scripts/build_lambdas.sh                  # static Go binaries for Lambda (linux/arm64, ~4 MB each)
 npx serverless@3 deploy                        # API Gateway, Lambdas, S3, SQS+DLQ, RDS, CloudFront, IAM (~10 min: RDS)
-bash scripts/deploy_web.sh                     # builds the console against the API URL → S3 + CloudFront
+bash scripts/deploy_web.sh && bash scripts/deploy_amplify.sh   # console → S3, then AWS Amplify (HTTPS, short URL)
 npx serverless@3 info --verbose                # API URL, API key, DatabaseHost
 DATABASE_URL="postgresql://loanadmin:<db-password>@<DatabaseHost>:5432/loan_engine?sslmode=require" go run ./apps/migrate
 ```
 Then point n8n at RDS: in `.env`, set `APP_DATABASE_URL` to the same RDS URL and `UNSUBSCRIBE_BASE_URL=<API URL>/v1/unsubscribe`, then run `docker compose up -d` (the credentials are re-created).
 
-Open the `WebUrl` output (CloudFront) and paste the API key once (**Connect**).
+Open the Amplify URL that `deploy_amplify.sh` prints and paste the API key once (**Connect**).
 
 Console development: `cd apps/web && cp .env.example .env.local && npm install && npm run dev` (it points at the deployed API).
 
@@ -207,7 +247,7 @@ CI (`.github/workflows/ci.yml`) runs all of the above on every push and PR again
 | **Text windowing + verbatim-evidence validation** in the crawler | CSS selectors | A redesign doesn't break extraction (layout-change handling, a brief bonus). Hallucinated or injected numbers are dropped. An empty extraction keeps yesterday's data |
 | **`UNIQUE(user_id, digest_key)` + `notified_at`** | "Remember not to resend" | Duplicate emails are impossible at the database level. A failed send retries up to 3×, then it's marked FAILED |
 | **API Gateway REST (API key, usage plan)** | HTTP API | Quotas and throttling per client; HTTP APIs have no usage plans |
-| **Next.js static export on S3 + CloudFront** | Next.js server (SSR) on Lambda; Vercel | The console only calls our API from the browser, so a server would add cost and patching for nothing. CloudFront serves from Indian edge locations |
+| **Next.js static export on AWS Amplify** (CloudFront optional) | Next.js server (SSR) on Lambda; Vercel | The console only calls our API from the browser, so a server would add cost and patching for nothing. Amplify gives HTTPS and a short URL; `cdn=true` switches on CloudFront once the account is verified |
 | **Public RDS, TLS-only, strong password** (demo) | Private RDS + NAT (~$32/mo) | Lambdas outside a VPC have changing IPs, so allowlisting isn't possible. Production: private subnets + RDS Proxy |
 | **Capability packages with enforced boundaries** | One flat package | Vendor isolation (AWS SDK only in `internal/`, compiler-enforced). A test fails the build on any other boundary violation |
 | **Go for the backend** | Python (our first implementation) | Measured on 1M rows: Python (tuned) 15.0 s, Go 6.0–6.8 s (2.2–2.5× faster), with faster cold starts and a single static binary. Full analysis: [DESIGN §9.15](docs/DESIGN.md) |
